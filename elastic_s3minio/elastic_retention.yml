@@ -1,0 +1,7 @@
+retention:
+ - name: Retention for filebeat-.*
+   pattern: filebeat-.*
+   max_days: 15
+ - name: Retention for .ds-my-data-stream
+   pattern: .ds-my-data-stream-.*
+   max_days: 12

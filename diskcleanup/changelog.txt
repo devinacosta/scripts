@@ -1,0 +1,9 @@
+Changelog for diskcleanup.py
+----------------------------
+1.2.1   (2023-09-28 00:00:00 -0700)
+  * Added functionality to deal with abrt files.
+1.1.1   (2023-09-03 22:38:00 -0700)
+  * Added automatic configuration search on startup of script. Will search for config file .yml, .yaml.
+  * Added a few more debug fixes and minor updates to script.
+  * Added Changelog.txt file to Repository
+  * Included WHL files for Python3.6 and Python3.9 for PyYAML.
