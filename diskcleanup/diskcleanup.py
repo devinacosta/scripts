@@ -2,7 +2,7 @@
 """
 # Disk Cleanup Python Script
 # Written by Devin Acosta
-# Version 1.2.1 09/28/2023
+# Version 1.2.2 02/05/2024
 # Repo: https://github.com/devinacosta/python/blob/master/scripts/diskcleanup/
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 
 # Initial Variables
 rc_files = {}
-SCRIPTVER = "1.2.1"
+SCRIPTVER = "1.2.2"
 
 """
 ABRT Functions
@@ -153,10 +153,13 @@ def extract_date_from_directory_name(directory_name):
 def find_yaml_config():
 
     # Get Script name, and look for YML that matches.
+    current_directory = os.path.abspath(os.path.dirname(__file__))
     script_prefix = os.path.basename(__file__).split('.')[0]
+    full_script_prefix = f"{current_directory}/{script_prefix}"
+
 
     # List of possible YAML filenames to check
-    yaml_filenames = [f'{script_prefix}.yml', f'{script_prefix}.yaml']
+    yaml_filenames = [f'{full_script_prefix}.yml', f'{full_script_prefix}.yaml']
 
     for filename in yaml_filenames:
         if os.path.isfile(filename):
@@ -405,6 +408,7 @@ if __name__ == '__main__':
 
     # Variable stuff
     script_name = os.path.basename(__file__)
+    current_directory = os.path.abspath(os.path.dirname(__file__))
 
     # Init Config
     yml_config = find_yaml_config()
@@ -419,9 +423,10 @@ if __name__ == '__main__':
     abrt_maxsize = files_main_settings['abrt_maxsize']
     abrt_directory = files_main_settings['abrt_directory']
     LOGFILE = files_main_settings['log_file']
+    LOGFILE_PATH = f"{current_directory}/{LOGFILE}"
 
     # Initialize Logging
-    logging.basicConfig(filename=LOGFILE, filemode='a', format='%(asctime)s|%(name)s|%(levelname)s| %(message)s', level=logging.INFO)
+    logging.basicConfig(filename=LOGFILE_PATH, filemode='a', format='%(asctime)s|%(name)s|%(levelname)s| %(message)s', level=logging.INFO)
     logging.info(ascii_art_text)
     logging.info(f"{script_name} [ verison: {SCRIPTVER} ] - Starting...")
     logging.info(f"{script_name} [ config_file: {yml_config} ]")

@@ -1,5 +1,7 @@
 Changelog for diskcleanup.py
 ----------------------------
+1.2.2   (2024-02-05 12:00:00 -0700)
+  * Fixed issue when script was called from another directory.
 1.2.1   (2023-09-28 00:00:00 -0700)
   * Added functionality to deal with abrt files.
 1.1.1   (2023-09-03 22:38:00 -0700)
