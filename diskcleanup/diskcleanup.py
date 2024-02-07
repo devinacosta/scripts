@@ -2,13 +2,12 @@
 """
 # Disk Cleanup Python Script
 # Written by Devin Acosta
-# Version 1.2.2 02/05/2024
+# Version 1.2.4 02/07/2024
 # Repo: https://github.com/devinacosta/python/blob/master/scripts/diskcleanup/
 """
 
 # Import Libraries
 import arrow
-import art
 import datetime
 import glob
 import logging
@@ -21,7 +20,7 @@ from pathlib import Path
 
 # Initial Variables
 rc_files = {}
-SCRIPTVER = "1.2.2"
+SCRIPTVER = "1.2.4"
 
 """
 ABRT Functions
@@ -132,6 +131,35 @@ def delete_abrt_directories_by_size(dump_dir, size_threshold):
 """
 End of ABRT Functions
 """
+
+"""
+Function to Truncate Log File (keep our logs from taking over OS)
+"""
+def truncate_log_file(filename, file_size):
+    # Convert human-readable size (e.g., 100M) to bytes
+    size_multiplier = {'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4}
+    try:
+        size_unit = file_size[-1].upper()
+        size_value = int(file_size[:-1])
+        bytes_to_compare = size_value * size_multiplier[size_unit]
+    except (ValueError, KeyError):
+        raise ValueError("Invalid file size format. Use a format like '100M'.")
+
+    try:
+        # Check file size
+        actual_size = os.path.getsize(filename)
+
+    except FileNotFoundError:
+        actual_size = 0
+
+    if actual_size > bytes_to_compare:
+        # Truncate the file
+        with open(filename, 'r+') as file:
+            file.truncate(bytes_to_compare)
+
+        print(f"File '{filename}' truncated to {file_size}.")
+    else:
+        pass
 
 # Extract Date from Filename rather than file date/time
 def extract_date_from_directory_name(directory_name):
@@ -404,7 +432,6 @@ def check_auditd(audit_percent=50):
 if __name__ == '__main__':
 
     myprog = 'diskcleanup'
-    ascii_art_text = art.text2art("\nDisk Cleanup")
 
     # Variable stuff
     script_name = os.path.basename(__file__)
@@ -425,9 +452,11 @@ if __name__ == '__main__':
     LOGFILE = files_main_settings['log_file']
     LOGFILE_PATH = f"{current_directory}/{LOGFILE}"
 
+    # Truncate log file if over 100M in size
+    truncate_log_file(LOGFILE_PATH,'100M')
+
     # Initialize Logging
     logging.basicConfig(filename=LOGFILE_PATH, filemode='a', format='%(asctime)s|%(name)s|%(levelname)s| %(message)s', level=logging.INFO)
-    logging.info(ascii_art_text)
     logging.info(f"{script_name} [ verison: {SCRIPTVER} ] - Starting...")
     logging.info(f"{script_name} [ config_file: {yml_config} ]")
     logging.info("[settings][main]: %s" % files_main_settings)
@@ -464,3 +493,4 @@ if __name__ == '__main__':
 
     # Script Exit
     logging.info('Disk Cleanup has been completed.')
+
