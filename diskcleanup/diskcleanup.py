@@ -2,7 +2,7 @@
 """
 # Disk Cleanup Python Script
 # Written by Devin Acosta
-# Version 1.2.4 02/07/2024
+# Version 1.2.5 02/26/2024
 # Repo: https://github.com/devinacosta/python/blob/master/scripts/diskcleanup/
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Initial Variables
 rc_files = {}
-SCRIPTVER = "1.2.4"
+SCRIPTVER = "1.2.5"
 
 """
 ABRT Functions
@@ -131,6 +131,10 @@ def delete_abrt_directories_by_size(dump_dir, size_threshold):
 """
 End of ABRT Functions
 """
+
+def has_slashes(path):
+    return '/' in path
+
 
 """
 Function to Truncate Log File (keep our logs from taking over OS)
@@ -450,7 +454,12 @@ if __name__ == '__main__':
     abrt_maxsize = files_main_settings['abrt_maxsize']
     abrt_directory = files_main_settings['abrt_directory']
     LOGFILE = files_main_settings['log_file']
-    LOGFILE_PATH = f"{current_directory}/{LOGFILE}"
+
+    # Adjust Log File Path based upon if it's specific or not
+    if has_slashes(LOGFILE):
+        LOGFILE_PATH = LOGFILE
+    else:
+        LOGFILE_PATH = f"{current_directory}/{LOGFILE}"
 
     # Truncate log file if over 100M in size
     truncate_log_file(LOGFILE_PATH,'100M')
@@ -493,4 +502,3 @@ if __name__ == '__main__':
 
     # Script Exit
     logging.info('Disk Cleanup has been completed.')
-
