@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 # Disk Cleanup Python Script
 # Written by Devin Acosta
-# Version 1.2.5 02/26/2024
-# Repo: https://github.com/devinacosta/python/blob/master/scripts/diskcleanup/
+# Version 1.2.6 02/29/2024
 """
 
 # Import Libraries
@@ -20,7 +19,7 @@ from pathlib import Path
 
 # Initial Variables
 rc_files = {}
-SCRIPTVER = "1.2.5"
+SCRIPTVER = "1.2.6"
 
 """
 ABRT Functions
@@ -254,13 +253,13 @@ def advanced_cleanup_directory(directory, max_age_days, file_pattern):
     current_time = datetime.datetime.now()
 
     logging.info(f"[action][CHECK] : Performing Directory cleanup of directory: [{directory}], max_age_days: {max_age_days}")
-    try:
-        pattern = re.compile(file_pattern)
-   
-        for root, _, files in os.walk(directory):
+    pattern = re.compile(file_pattern)
 
-            for filename in files:
-                file_path = os.path.join(root, filename)
+    for root, _, files in os.walk(directory):
+
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            try:
                 file_age = current_time - datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
 
                 if pattern.search(filename) and file_age.days > max_age_days:
@@ -270,11 +269,12 @@ def advanced_cleanup_directory(directory, max_age_days, file_pattern):
                         logging.info(f"[action][REMOVE] : Removed old file {file_path} (Age: {file_age.days} days)")
                     except FileNotFoundError:
                         logging.info(f"[action][ENOENT] : File Not Found {file_path}")
+                        continue
                     except Exception as e:
                         logging.info(f"[action][ERROR] : An error occured: {e}")
-                    
-    except Exception as e:
-        print(f"[action][ERROR] : An error occurred: {str(e)}")
+            except  FileNotFoundError: 
+                logging.info(f"[action][ERROR] : File Not Found {file_path}")
+                continue
 
 # Function to Cleanup old files found in directory over XX days old. Reads
 # from INI file default settings.
