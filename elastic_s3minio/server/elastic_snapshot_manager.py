@@ -2,7 +2,7 @@
 '''
 Script to manage snapshots
 ie: Purge old Snapshots no longer needed.
-v. 1.0.0 - Devin Acosta (09/08/2023)
+v. 1.0.3 - Devin Acosta (01/08/2024)
 '''
 
 import argparse
@@ -16,9 +16,13 @@ import requests
 import urllib3
 import warnings
 import yaml
+import urllib3
 
 # Suppress the UserWarning
 warnings.filterwarnings("ignore", category=UserWarning, module="elasticsearch")
+# Suppress only the InsecureRequestWarning from urllib3 needed for Elasticsearch
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 # Read Data from YAML
 def read_retention_data_from_yaml(file_path):
@@ -108,13 +112,17 @@ def extract_date_from_filename(filename):
 
 # Return difference in date in the number of days.
 def date_difference(date1):
+    # Convert the input date string to a datetime object
+    input_datetime = datetime.strptime(date1, '%Y-%m-%d %H:%M:%S')
+
     # Get Today's date
-    today = datetime.today()
+    current_datetime = datetime.today()
 
     # Calculate the time difference
-    time_difference = today - date1
+    time_difference = (current_datetime  - input_datetime).days
 
-    return time_difference.days
+    # Return difference
+    return time_difference
 
 
 # Function to get a list of all snapshots
@@ -124,7 +132,10 @@ def get_all_snapshots():
     cat_snapshots = es.cat.snapshots(format="json")
     
     for snapshot_info in cat_snapshots:
-        snapshots.append(snapshot_info['id'])
+        _snapshot_id = snapshot_info['id']
+        _snapshot_start_epoch = str(datetime.utcfromtimestamp(int(snapshot_info['start_epoch'])))
+        _snapshot_append = { _snapshot_id: { 'date': _snapshot_start_epoch}}
+        snapshots.append(_snapshot_append)
     
     return snapshots
 
@@ -164,21 +175,32 @@ def process_snapshots(snapshots, delete_days, regex_pattern, retention_file):
 
     _snapshots = {}
     for snapshot in snapshots:
-        snap_date = extract_date_from_filename(snapshot)
-        snap_date_difference = date_difference(snap_date)
-        snapshot_name_minus = snapshot.strip('snapshot_')
-        _ret_data = retention_delete_days = get_value_based_on_regex(snapshot_name_minus, _retentions)
-        if _ret_data == None:
-            retention_delete_days = delete_days
+        for key, value in snapshot.items():
+            #snap_date = extract_date_from_filename(snapshot)
+            snap_date = value['date']
+            snap_date_difference = date_difference(snap_date)
+            snapshot_name_minus = key.strip('snapshot_')
+            _ret_data = get_value_based_on_regex(snapshot_name_minus, _retentions)
 
-        if int(snap_date_difference) >= retention_delete_days:
-            # Check to see if pattern patches to allow limiting which indices to process
-            if pattern_matches(snapshot, regex_pattern):
-                _snapshots[snapshot] = snap_date_difference
-        #print("Current Snap", snapshot, snap_date, snap_date_difference)
+            if _ret_data == None:
+                retention_delete_days = delete_days
+            else:
+                retention_delete_days = _ret_data
+
+            if int(snap_date_difference) > retention_delete_days:
+                # Check to see if pattern patches to allow limiting which indices to process
+                if pattern_matches(key, regex_pattern):
+                    _snapshots[key] = snap_date_difference
+            else:
+                logging.info(f"No Delete: Difference is {snapshot} : {snap_date_difference} / {retention_delete_days}")
+            #print("Current Snap", snapshot, snap_date, snap_date_difference)
+    #print(f"Returning Snapshots of: {_snapshots}")
 
     return _snapshots
 
+def get_all_indices(pattern):
+    # Print All Indices for pattern
+    pass
 
 # Main Program
 if __name__ == "__main__":
@@ -217,16 +239,23 @@ if __name__ == "__main__":
     parser.add_argument("-days", help="Number of days to delete indices old than this value", type=int, default=default_retention_maxdays)
     parser.add_argument("-pattern",help="Limit Snapshots to pattern specified", type=str, default='.*')
     parser.add_argument("-noaction", help="Stop before performing snapshots", default=False, action="store_true")
-    parser.add_argument("-repository", "-repo", help="S3 Repository name", default=False)
+    parser.add_argument("-repository", "-repo", help="S3 Repository name")
 
-    logging.info("Starting Snapshot Manager...")
-
+    # Process Arguments
     args = parser.parse_args()
     delete_days = args.days
     args_regex_pattern = args.pattern
     args_noaction = args.noaction
     args_repository = args.repository
-    logging.info(f"Snapshot [Default] max retention days: {delete_days}")
+
+    # Change which Repo to use if passed.
+    if args_repository != None:
+        elastic_repository = args_repository
+    print("Using Repository: ", elastic_repository)
+
+    logging.info("Starting Snapshot Manager...")
+    logging.info(f"[config] Elastic Repository: {elastic_repository}")
+    logging.info(f"[config] Snapshot [Default] max retention days: {delete_days}")
 
     # Get All Snapshots and store in var: snapshots
     snapshots = get_all_snapshots()

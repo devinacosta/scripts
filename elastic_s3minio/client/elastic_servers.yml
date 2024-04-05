@@ -1,0 +1,18 @@
+settings:
+  elastic_default_timeout: 60
+  elastic_restored_maxdays: 0
+  elastic_restore_batch_size: 3
+  elastic_max_shards_per_node: 1000
+  default_retention_maxdays: 14 
+  elastic_cacerts: '/etc/elasticsearch-1/cacerts.p12'
+
+
+servers:
+  - name: DEFAULT
+    hostname: 10.18.80.66 
+    port: 9201
+    use_ssl: True 
+    repository: aex20-repo
+    elastic_authentication: True
+    elastic_username: None 
+    elastic_password: None
