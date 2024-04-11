@@ -1,0 +1,12 @@
+settings:
+  # Options for Box_Style: SIMPLE, ASCII, SQUARE, ROUNDED, SQUARE_DOUBLE_HEAD
+  box_style:  SQUARE_DOUBLE_HEAD
+
+servers:
+  - name: default
+    hostname: 127.0.0.1
+    port: 9200
+    use_ssl: False 
+    elastic_authentication: True
+    elastic_username: None 
+    elastic_password: None
