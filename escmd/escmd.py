@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 '''
 Administration tool for Elastic Search, simplifies admin tasks.
-Version: 1.0.0a (04/10/2024)
+Version: 1.0.2 (04/11/2024)
 '''
 
 # Import Modules
@@ -22,7 +22,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich import box
 
-VERSION = '1.0.0'
+VERSION = '1.0.2'
 
 # Suppress only the InsecureRequestWarning from urllib3 needed for Elasticsearch
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -206,18 +206,13 @@ class ElasticsearchClient:
         """
         recovery_status = {}
         try:
-            indices = self.es.cat.indices(format='json', h='index')
-            for index in indices:
-                try:
-                    recovery = self.es.cat.recovery(index=index['index'], format='json')
-                    filtered_recovery = [shard for shard in recovery if shard['stage'] != 'done']
-                    if filtered_recovery:
-                        recovery_status[index['index']] = filtered_recovery
-                except RequestError as e:
-                    if 'illegal_argument_exception' in str(e) and '.geoip_databases' in str(e):
-                        pass
-                    else:
-                        raise e
+            recovery_info = self.es.cat.recovery(format='json')
+            for entry in recovery_info:
+                index = entry['index']
+                if entry['stage'] != 'done':
+                    if index not in recovery_status:
+                        recovery_status[index] = []
+                    recovery_status[index].append(entry)
         except Exception as e:
             print(f"An error occurred: {e}")
         return recovery_status
@@ -273,6 +268,11 @@ class ElasticsearchClient:
                 'shards': shards_count
             })
         return parsed_data
+
+    def ping(self):
+        if (self.es.ping()):
+            return True
+
 
     def print_table_from_dict(self, title, data_dict):
         console = Console()
@@ -401,7 +401,16 @@ class ElasticsearchClient:
         console.print("\n")
 
 
-# ---- End of Class Library above.            
+# ---- End of Class Library above.    
+
+
+def show_message_box(title, message, message_style="bold white", panel_style="white on blue"):
+
+    message = Text(f"{message}", style=message_style, justify="center")
+    panel = Panel(message, style=panel_style, title=title, border_style="bold white", width=80)
+    console.print("\n")
+    console.print(panel)
+    console.print("\n")        
 
 def convert_dict_list_to_dict(dict_list):
     result_dict = {}
@@ -459,7 +468,7 @@ def read_settings(file):
         with open(file, 'r') as file:
             settings = json.load(file)
     except FileNotFoundError:
-        settings = {"current_cluster": "DEFAULT"}
+        settings = {"current_cluster": "default"}
     return settings
 
 def write_settings(settings):
@@ -495,6 +504,7 @@ if __name__ == "__main__":
     indices_parser = subparsers.add_parser('indices', help='Indices')
     masters_parser = subparsers.add_parser('masters', help='List ES Master nodes')
     nodes_parser = subparsers.add_parser('nodes', help='List Elasticsearch nodes')
+    ping_parser = subparsers.add_parser('ping', help='Check ES Connection')
     recovery_parser = subparsers.add_parser('recovery', help='List Recovery Jobs')
     settings_parser = subparsers.add_parser('settings', help='Actions for ES Allocation')
     getdefault_parser = subparsers.add_parser('get-default', help='Show Default Cluster configured.')
@@ -530,6 +540,27 @@ if __name__ == "__main__":
     # Now we need to see what environment is defauled to by set-default
     state_file = f"{script_directory}/escmd.json"
     default_cluster_from_file = read_settings(state_file)['current_cluster']
+
+    # Need to Place this here so that it bypasses a lot of the checks afterwards.
+    if (args.command == 'set-default'):
+        cmd_cluster_touse = args.defaultcluster_cmd
+        set_cluster(state_file, cmd_cluster_touse)
+        exit()
+
+    if args.command == 'get-default':
+        current_cluster = read_settings(state_file)
+        message = [f"name: {default_cluster_from_file}"]
+        try:
+            for key,value in servers_dict[default_cluster_from_file].items():
+                append_item = f"{key}: {value}"
+                message.append(append_item)
+                show_message = "\n".join(message)
+        except KeyError: 
+            show_message = "No Configuration Found"
+        
+        show_message_box(f"Default Cluster: {current_cluster['current_cluster']}", message=f"\n{show_message}\n")      
+        exit()
+   
 
     # Now we need to figure out if we use location or default from file.
     if args.locations == None:
@@ -579,15 +610,18 @@ if __name__ == "__main__":
     else:
 
         # We want to ensure it doesn't try to connect to ES for the set-default command.
-        if args.command != 'set-default':
+        if (args.command != 'set-default'):
 
             # Setup Elastic Search Connection
             es_client = ElasticsearchClient(host=elastic_host, port=elastic_port, use_ssl=elastic_use_ssl, verify_certs=elastic_verify_certs, box_style=box_style)
 
-        if args.command == 'get-default':
-            current_cluster = read_settings(state_file)
-            print(f"Current Default Cluster is: [bold cyan]{current_cluster['current_cluster']}[/bold cyan]")
-            exit()
+        if args.command == 'ping':
+            # Setup Elastic Search Connection
+            if es_client.ping():
+                cluster_connection_info = f"Cluster: {locations}\nhost: {elastic_host}\nport: {elastic_port}\nssl: {elastic_use_ssl}\nverify_certs: {elastic_verify_certs}\n"
+                es_client.show_message_box("Connection Success", f"\n{cluster_connection_info}\nConnection was successful.\n", message_style="bold white")
+                exit()
+
 
         if (args.command == 'allocation'):
             if (args.allocation_cmd == "display" or args.allocation_cmd == "show"):
@@ -613,7 +647,7 @@ if __name__ == "__main__":
                     exit(1)            
     
 
-        elif (args.command == 'current-master'):
+        if (args.command == 'current-master'):
             
             master_node_id = es_client.get_master_node()
             
@@ -697,9 +731,6 @@ if __name__ == "__main__":
                 es_client.print_table_from_dict("Cluster Settings", cluster_flattened)
                 exit()
 
-        elif (args.command == 'set-default'):
-            cmd_cluster_touse = args.defaultcluster_cmd
-            set_cluster(state_file, cmd_cluster_touse)
 
         elif (args.command == 'version'):
                 es_client.show_message_box("Version Info",f"Utility: escmd.py\nVersion: {VERSION}", message_style='bold white', panel_style='bold white')
