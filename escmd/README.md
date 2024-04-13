@@ -178,11 +178,28 @@ Current Default Cluster is: default
 └─────────────────────────────────────────────┴───────┘
 ```
 
+#### Disable Allocation for Patching/Rebooting
+> You will want to disable allocation during any restart of the Elasticsearch nodes. Use the commands below to complete this task.
+
+To Disable Allocation Use:
+```
+./escmd.py allocation disable
+Cluster allocation change has completed successfully.
+Successfully changed allocation to primaries only.
+```
+
+To Enable Allocation Use:
+```
+./escmd.py allocation enable
+Cluster allocation change has completed successfully.
+Successfully re-enabled all shards allocation.
+```
+
+You can check the allocation setting by using:
+./escmd.py settings
 
 ## License
 
 MIT
 
 **Free Software, Hell Yeah!**
-
-
