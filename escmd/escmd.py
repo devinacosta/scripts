@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 '''
 Administration tool for Elastic Search, simplifies admin tasks.
-Version: 1.0.2 (04/11/2024)
+Version: 1.0.3 (04/16/2024)
 '''
 
 # Import Modules
@@ -22,7 +22,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich import box
 
-VERSION = '1.0.2'
+VERSION = '1.0.3'
 
 # Suppress only the InsecureRequestWarning from urllib3 needed for Elasticsearch
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -93,7 +93,8 @@ class ElasticsearchClient:
     def get_nodes(self):
         stats = self.es.nodes.stats()
         node_stats = self.parse_node_stats(stats)
-        return node_stats
+        nodes_sorted = sorted(node_stats, key=lambda x: x['name'])
+        return nodes_sorted
 
     def get_all_nodes_stats(self):
         nodes_stats = self.es.nodes.stats()
@@ -151,11 +152,13 @@ class ElasticsearchClient:
         # Get all indices
         if (self.pattern == None):
             indices = self.es.cat.indices(format='json')
+            indices_sorted = sorted(indices, key=lambda x: x['index'])
         else:
             search_pattern = f"*{self.pattern}*"
             indices = self.es.cat.indices(format='json', index=search_pattern)
+            indices_sorted = sorted(indices, key=lambda x: x['index'])
 
-        self.print_table_indices(indices)
+        self.print_table_indices(indices_sorted)
 
 
     def get_master_node(self):
