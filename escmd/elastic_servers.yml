@@ -7,6 +7,6 @@ servers:
     hostname: 127.0.0.1
     port: 9200
     use_ssl: False 
-    elastic_authentication: True
+    elastic_authentication: False 
     elastic_username: None 
     elastic_password: None
