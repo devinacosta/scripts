@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 '''
 Administration tool for Elastic Search, simplifies admin tasks.
-Version: 1.0.3 (04/16/2024)
+Version: 1.0.5 (04/18/2024)
+- Added Disk Storage
 '''
 
 # Import Modules
@@ -22,7 +23,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich import box
 
-VERSION = '1.0.3'
+VERSION = '1.0.4'
 
 # Suppress only the InsecureRequestWarning from urllib3 needed for Elasticsearch
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -34,13 +35,26 @@ warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
 
 class ElasticsearchClient:
-    def __init__(self, host='localhost', port=9200, use_ssl=False, verify_certs=False, box_style=box.SIMPLE):
+    def __init__(self, host='localhost', port=9200, use_ssl=False, verify_certs=False, elastic_authentication=False, elastic_username=None, elastic_password=None, box_style=box.SIMPLE):
         self.host = host
         self.port = port
         self.use_ssl = use_ssl
         self.verify_certs = verify_certs
         self.box_style = box_style
-        self.es = Elasticsearch([{'host': self.host, 'port': self.port, 'use_ssl': self.use_ssl, 'verify_certs': self.verify_certs}])
+        self.elastic_authentication = elastic_authentication
+        self.elastic_username = elastic_username
+        self.elastic_password = elastic_password
+        self.elastic_host = host
+        self.elastic_port = port
+
+        # Set Authentication to True if Username/Password NOT None
+        if (self.elastic_username != None and self.elastic_password != None):
+            self.elastic_authentication = True
+
+        if self.elastic_authentication == True:
+            self.es = Elasticsearch([{'host': self.host, 'port': self.port, 'use_ssl': self.use_ssl, 'verify_certs': self.verify_certs, 'http_auth': (self.elastic_username, self.elastic_password)}])
+        else:
+            self.es = Elasticsearch([{'host': self.host, 'port': self.port, 'use_ssl': self.use_ssl, 'verify_certs': self.verify_certs}])
 
         if self.es.ping():
             pass
@@ -83,6 +97,13 @@ class ElasticsearchClient:
             if role in node['roles']:
                 filtered_nodes.append(node)
         return filtered_nodes
+
+    def format_bytes(self, size_in_bytes):
+        # Function to convert bytes to a human-readable format
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_in_bytes < 1024.0:
+                return f"{size_in_bytes:.2f} {unit}"
+            size_in_bytes /= 1024.0
 
     def get_template(self, name=None):
         if name:
@@ -130,6 +151,26 @@ class ElasticsearchClient:
             return 'yellow'
         else:
             return 'unknown'
+
+    def get_allocation_as_dict(self):
+
+        allocation = self.es.cat.allocation(format='json', bytes='b')
+        
+        allocation_dict = {}
+        for entry in allocation:
+            node = entry['node']
+            allocation_dict[node] = {
+                'shards': int(entry['shards']),
+                'disk.percent': float(entry['disk.percent']),
+                'disk.used': int(entry['disk.used']),
+                'disk.avail': int(entry['disk.avail']),
+                'disk.total': int(entry['disk.total'])
+            }
+
+        # Sort the dictionary by keys alphabetically
+        sorted_allocation_dict = dict(sorted(allocation_dict.items()))
+        
+        return sorted_allocation_dict
 
     def get_indices_stats(self, pattern=None):
  
@@ -276,6 +317,29 @@ class ElasticsearchClient:
         if (self.es.ping()):
             return True
 
+
+    def print_table_allocation(self, title, data_dict):
+        console = Console()
+
+        table = Table(show_header=True, title=title, header_style="bold cyan", box=self.box_style)
+        table.add_column("Storage Node")
+        table.add_column("Shards", justify="center") 
+        table.add_column("Disk Percent", justify="center") 
+        table.add_column("Disk Used", justify="center") 
+        table.add_column("Disk Avail", justify="center")
+        table.add_column("Disk Total", justify="center")
+
+        for key, value in data_dict.items():
+            storage_node = key
+            storage_values = value
+            storage_shards = storage_values['shards']
+            storage_disk_percent = storage_values['disk.percent']
+            storage_disk_used = self.format_bytes(storage_values['disk.used'])
+            storage_disk_avail = self.format_bytes(storage_values['disk.avail'])
+            storage_disk_total = self.format_bytes(storage_values['disk.total'])
+            table.add_row(str(key), str(storage_shards), str(storage_disk_percent), str(storage_disk_used), str(storage_disk_avail), str(storage_disk_total))
+
+        console.print(table)
 
     def print_table_from_dict(self, title, data_dict):
         console = Console()
@@ -510,6 +574,7 @@ if __name__ == "__main__":
     ping_parser = subparsers.add_parser('ping', help='Check ES Connection')
     recovery_parser = subparsers.add_parser('recovery', help='List Recovery Jobs')
     settings_parser = subparsers.add_parser('settings', help='Actions for ES Allocation')
+    storage_parser = subparsers.add_parser('storage', help='List ES Disk Usage')
     getdefault_parser = subparsers.add_parser('get-default', help='Show Default Cluster configured.')
     setdefault_parser = subparsers.add_parser('set-default', help='Set Default Cluster to use for commands.')
     version = subparsers.add_parser('version', help='Show Version Number')
@@ -527,6 +592,7 @@ if __name__ == "__main__":
     settings_parser.add_argument('--format', choices=['table', 'json'], nargs='?', default='table', help='Output format (json or table)')
     settings_parser.add_argument('settings_cmd', choices=['display', 'show'], nargs='?', default='display', help='Show Settings')
     setdefault_parser.add_argument('defaultcluster_cmd', nargs='?', default='default')
+    storage_parser.add_argument('--format', choices=['data','json', 'table'], nargs='?', default='table', help='Ouptput format (json or table)')
 
     args = parser.parse_args()
 
@@ -587,9 +653,11 @@ if __name__ == "__main__":
     elastic_port = location_to_use_dict.get('port', 9200)
     elastic_use_ssl = location_to_use_dict.get('use_ssl', False)
     elastic_repository = location_to_use_dict.get('repository', None)
-    elastic_authentication = location_to_use_dict.get('elastic_authentication', False)
+    #elastic_authentication = location_to_use_dict.get('elastic_authentication', False)
     elastic_username = location_to_use_dict.get('elastic_username', None)
     elastic_password = location_to_use_dict.get('elastic_password', None)
+    elastic_authentication = location_to_use_dict.get('elastic_authentication', elastic_username is not None and elastic_password is not None)
+
     elastic_verify_certs = location_to_use_dict.get('verify_certs', False)
 
     # Need to Define the Box Style (have to do a bit of magic)
@@ -616,12 +684,15 @@ if __name__ == "__main__":
         if (args.command != 'set-default'):
 
             # Setup Elastic Search Connection
-            es_client = ElasticsearchClient(host=elastic_host, port=elastic_port, use_ssl=elastic_use_ssl, verify_certs=elastic_verify_certs, box_style=box_style)
+            es_client = ElasticsearchClient(host=elastic_host, port=elastic_port, use_ssl=elastic_use_ssl, verify_certs=elastic_verify_certs, elastic_authentication=elastic_authentication, elastic_username=elastic_username, elastic_password=elastic_password, box_style=box_style)
 
         if args.command == 'ping':
             # Setup Elastic Search Connection
             if es_client.ping():
-                cluster_connection_info = f"Cluster: {locations}\nhost: {elastic_host}\nport: {elastic_port}\nssl: {elastic_use_ssl}\nverify_certs: {elastic_verify_certs}\n"
+                if (es_client.elastic_username != None and es_client.elastic_password != None):
+                    cluster_connection_info = f"Cluster: {locations}\nhost: {elastic_host}\nport: {elastic_port}\nssl: {elastic_use_ssl}\nverify_certs: {elastic_verify_certs}\nelastic_username: {elastic_username}\nelastic_password: XXXXXXXXXXX\n"
+                else:
+                    cluster_connection_info = f"Cluster: {locations}\nhost: {elastic_host}\nport: {elastic_port}\nssl: {elastic_use_ssl}\nverify_certs: {elastic_verify_certs}\n"
                 es_client.show_message_box("Connection Success", f"\n{cluster_connection_info}\nConnection was successful.\n", message_style="bold white")
                 exit()
 
@@ -659,7 +730,7 @@ if __name__ == "__main__":
             else:
                 print(f"Current Master is: [cyan]{master_node_id}[/cyan]")
 
-        elif (args.command == 'nodes'):
+        if (args.command == 'nodes'):
             nodes = es_client.get_nodes()
 
             if args.format=='json':
@@ -675,7 +746,7 @@ if __name__ == "__main__":
                 display_keys = ["name", "hostname", "node", "roles"]
                 es_client.print_filtered_key_value_pairs(keys,values, display_keys)
 
-        elif (args.command == 'masters'):
+        if (args.command == 'masters'):
             nodes = es_client.get_nodes()
             master_node_id = es_client.get_master_node()
             master_nodes = es_client.filter_nodes_by_role(nodes, 'master')
@@ -687,7 +758,7 @@ if __name__ == "__main__":
                 display_keys = ["name", "hostname", "node", "roles"]
                 es_client.print_filtered_key_value_pairs(keys,values, display_keys)            
 
-        elif (args.command == 'health'):
+        if (args.command == 'health'):
             health_data = es_client.get_cluster_health()
             if args.format=='json':
                 json_dump = json.dumps(health_data)
@@ -696,7 +767,7 @@ if __name__ == "__main__":
                 print("")
                 es_client.print_table_from_dict('Elastic Health Status', health_data)
 
-        elif (args.command == 'indices'):
+        if (args.command == 'indices'):
 
             if (args.regex != None):
                 if (args.format=='json'):
@@ -710,7 +781,7 @@ if __name__ == "__main__":
             else:
                 es_client.list_indices_stats(None)
 
-        elif (args.command == 'recovery'):
+        if (args.command == 'recovery'):
             if (args.format == "json"):
                 es_recovery = es_client.get_recovery_status()
                 print(json.dumps(es_recovery))
@@ -724,7 +795,7 @@ if __name__ == "__main__":
                     es_client.display_recovery_table(es_recovery)
                 exit()
 
-        elif (args.command == 'settings'):
+        if (args.command == 'settings'):
             if (args.format == 'json'):
                 print(es_client.show_cluster_settings())
                 exit()
@@ -734,8 +805,11 @@ if __name__ == "__main__":
                 es_client.print_table_from_dict("Cluster Settings", cluster_flattened)
                 exit()
 
+        if (args.command == 'storage'):
+            allocation_data = es_client.get_allocation_as_dict()
+            es_client.print_table_allocation("Cluster Allocation", allocation_data)
 
-        elif (args.command == 'version'):
+        if (args.command == 'version'):
                 es_client.show_message_box("Version Info",f"Utility: escmd.py\nVersion: {VERSION}", message_style='bold white', panel_style='bold white')
                 exit()
         
