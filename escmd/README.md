@@ -166,6 +166,45 @@ Current Default Cluster is: default
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
+#### Check Shards
+```
+./escmd.py shards
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+┃ Index Name                          ┃ Shard Number ┃ Pri/Rep ┃ State      ┃ Docs ┃ Store  ┃ Node   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+│ .apm-agent-configuration            │ 0            │ p       │ STARTED    │ 0    │ 208b   │ node-1 │
+│ .apm-custom-link                    │ 0            │ p       │ STARTED    │ 0    │ 208b   │ node-1 │
+│ .ds-ilm-history-5-2024.01.10-000002 │ 0            │ p       │ STARTED    │ N/A  │ N/A    │ node-1 │
+│ .ds-ilm-history-5-2024.02.09-000003 │ 0            │ p       │ STARTED    │ N/A  │ N/A    │ node-1 │
+│ .ds-ilm-history-5-2024.03.10-000004 │ 0            │ p       │ STARTED    │ N/A  │ N/A    │ node-1 │
+│ .ds-ilm-history-5-2024.04.09-000005 │ 0            │ p       │ STARTED    │ N/A  │ N/A    │ node-1 │
+│ .geoip_databases                    │ 0            │ p       │ STARTED    │ 35   │ 32.5mb │ node-1 │
+│ .kibana-event-log-7.15.1-000002     │ 0            │ p       │ STARTED    │ 0    │ 208b   │ node-1 │
+│ .kibana-event-log-7.15.1-000003     │ 0            │ p       │ STARTED    │ 0    │ 208b   │ node-1 │
+│ .kibana-event-log-7.15.1-000004     │ 0            │ p       │ STARTED    │ 1    │ 6kb    │ node-1 │
+│ .kibana-event-log-7.15.1-000005     │ 0            │ p       │ STARTED    │ 3    │ 12.2kb │ node-1 │
+│ .kibana_7.15.1_001                  │ 0            │ p       │ STARTED    │ 37   │ 2.3mb  │ node-1 │
+│ .kibana_task_manager_7.15.1_001     │ 0            │ p       │ STARTED    │ 15   │ 36.7mb │ node-1 │
+│ .tasks                              │ 0            │ p       │ STARTED    │ 4    │ 21.3kb │ node-1 │
+│ rc_minios3_state                    │ 0            │ p       │ STARTED    │ 1    │ 5.7kb  │ node-1 │
+│ rc_minios3_state                    │ 0            │ r       │ UNASSIGNED │ N/A  │ N/A    │ N/A    │
+└─────────────────────────────────────┴──────────────┴─────────┴────────────┴──────┴────────┴────────┘
+```
+You can use REGEX pattern after shards to limit to show only certain shards
+```
+./escmd.py shards .kibana
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+┃ Index Name                      ┃ Shard Number ┃ Pri/Rep ┃ State   ┃ Docs ┃ Store  ┃ Node   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+│ .kibana-event-log-7.15.1-000002 │ 0            │ p       │ STARTED │ 0    │ 208b   │ node-1 │
+│ .kibana-event-log-7.15.1-000003 │ 0            │ p       │ STARTED │ 0    │ 208b   │ node-1 │
+│ .kibana_7.15.1_001              │ 0            │ p       │ STARTED │ 37   │ 2.3mb  │ node-1 │
+│ .kibana_task_manager_7.15.1_001 │ 0            │ p       │ STARTED │ 15   │ 36.6mb │ node-1 │
+│ .kibana-event-log-7.15.1-000004 │ 0            │ p       │ STARTED │ 1    │ 6kb    │ node-1 │
+│ .kibana-event-log-7.15.1-000005 │ 0            │ p       │ STARTED │ 3    │ 12.2kb │ node-1 │
+└─────────────────────────────────┴──────────────┴─────────┴─────────┴──────┴────────┴────────┘
+```
+
 #### Check Cluster Settings
 > Note that it will only show settings if they were configured from the default settings. (So not showing much is normal).
 ```
