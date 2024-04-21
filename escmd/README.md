@@ -7,7 +7,7 @@ escmd is a command line utility to make interacting with Elastic Search more enj
 - Check Cluster Health
 - Check Cluster Settings 
 - List Recovery Status
-- List (Nodes, Masters, Indices)
+- List (Nodes, Masters, Indices, Shards)
 - Export data into JSON format (so you can pipe to another command)
 
 
