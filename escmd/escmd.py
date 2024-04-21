@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 '''
 Administration tool for Elastic Search, simplifies admin tasks.
-Version: 1.0.5 (04/18/2024)
-- Added Disk Storage
+Version: 1.0.7 (04/21/2024)
 '''
+VERSION = '1.0.7'
+DATE = "04/21/2024"
+
 
 # Import Modules
 import argparse
@@ -22,8 +24,6 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 from rich import box
-
-VERSION = '1.0.4'
 
 # Suppress only the InsecureRequestWarning from urllib3 needed for Elasticsearch
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -161,10 +161,10 @@ class ElasticsearchClient:
             node = entry['node']
             allocation_dict[node] = {
                 'shards': int(entry['shards']),
-                'disk.percent': float(entry['disk.percent']),
-                'disk.used': int(entry['disk.used']),
-                'disk.avail': int(entry['disk.avail']),
-                'disk.total': int(entry['disk.total'])
+                'disk.percent': float(entry['disk.percent']) if entry['disk.percent'] is not None else 0,
+                'disk.used': int(entry['disk.used']) if entry['disk.used'] is not None else 0,
+                'disk.avail': int(entry['disk.avail']) if entry['disk.avail'] is not None else 0,
+                'disk.total': int(entry['disk.total']) if entry['disk.total'] is not None else 0
             }
 
         # Sort the dictionary by keys alphabetically
@@ -182,9 +182,20 @@ class ElasticsearchClient:
         else:
             search_pattern = f"*{self.pattern}*"
             indices = self.es.cat.indices(format='json', index=search_pattern)
-        indices_json = json.dumps(indices)
-        return indices_json
+        return json.dumps(indices)
 
+
+    def get_shards_stats(self, pattern=None):
+ 
+        self.pattern = pattern
+
+        # Get all indices
+        if (self.pattern == None):
+            indices = self.es.cat.shards(format='json')
+        else:
+            search_pattern = f"*{self.pattern}*"
+            shards = self.es.cat.shards(format='json', index=search_pattern)
+        return shards
 
     def list_indices_stats(self, pattern=None):
  
@@ -260,6 +271,30 @@ class ElasticsearchClient:
         except Exception as e:
             print(f"An error occurred: {e}")
         return recovery_status
+
+    def get_shards_as_dict(self):
+        shards_info_list = []
+        try:
+            response = self.es.cat.shards(format="json")
+            for shard_info in response:
+                shard_dict = {
+                    "index": shard_info["index"],
+                    "shard": shard_info["shard"],
+                    "prirep": shard_info["prirep"],
+                    "state": shard_info["state"],
+                    "docs": shard_info["docs"],
+                    "store": shard_info["store"],
+                    "node": shard_info["node"]
+                }
+                shards_info_list.append(shard_dict)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+        # Sort shards_info_list by index_name
+        sorted_shards_info_list = sorted(shards_info_list, key=lambda x: x["index"])
+
+        return sorted_shards_info_list
+
 
     def print_filtered_key_value_pairs(self, keys, values, display_keys):
      
@@ -338,6 +373,30 @@ class ElasticsearchClient:
             storage_disk_avail = self.format_bytes(storage_values['disk.avail'])
             storage_disk_total = self.format_bytes(storage_values['disk.total'])
             table.add_row(str(key), str(storage_shards), str(storage_disk_percent), str(storage_disk_used), str(storage_disk_avail), str(storage_disk_total))
+
+        console.print(table)
+
+    def print_table_shards(self, shards_info):
+        console = Console()
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Index Name")
+        table.add_column("Shard Number")
+        table.add_column("Pri/Rep")
+        table.add_column("State")
+        table.add_column("Docs")
+        table.add_column("Store")
+        table.add_column("Node")
+
+        for shard_info in shards_info:
+            table.add_row(
+                shard_info["index"],
+                shard_info["shard"],
+                shard_info["prirep"],
+                shard_info["state"],
+                shard_info["docs"] if shard_info["docs"] is not None else "N/A",
+                shard_info["store"] if shard_info["store"] is not None else "N/A",
+                shard_info["node"] if shard_info["node"] is not None else "N/A"
+            )
 
         console.print(table)
 
@@ -577,6 +636,8 @@ if __name__ == "__main__":
     storage_parser = subparsers.add_parser('storage', help='List ES Disk Usage')
     getdefault_parser = subparsers.add_parser('get-default', help='Show Default Cluster configured.')
     setdefault_parser = subparsers.add_parser('set-default', help='Set Default Cluster to use for commands.')
+    shards_parser = subparsers.add_parser('shards', help='Show Shards')
+
     version = subparsers.add_parser('version', help='Show Version Number')
 
 
@@ -593,6 +654,9 @@ if __name__ == "__main__":
     settings_parser.add_argument('settings_cmd', choices=['display', 'show'], nargs='?', default='display', help='Show Settings')
     setdefault_parser.add_argument('defaultcluster_cmd', nargs='?', default='default')
     storage_parser.add_argument('--format', choices=['data','json', 'table'], nargs='?', default='table', help='Ouptput format (json or table)')
+    shards_parser.add_argument('--format', choices=['data','json', 'table'], nargs='?', default='table', help='Ouptput format (json or table)')
+    shards_parser.add_argument('regex', nargs='?', default=None, help='Regex')
+
 
     args = parser.parse_args()
 
@@ -809,7 +873,26 @@ if __name__ == "__main__":
             allocation_data = es_client.get_allocation_as_dict()
             es_client.print_table_allocation("Cluster Allocation", allocation_data)
 
+        if (args.command == 'shards'):
+
+            if (args.regex != None):
+                if (args.format=='json'):
+                    print(json.dumps(es_client.get_shards_stats(pattern=args.regex)))
+                    exit()
+                else:
+                    shards_data = es_client.get_shards_stats(pattern=args.regex)
+                    es_client.print_table_shards(shards_data)
+                    exit()
+            # No Regex At all
+            else:
+                shards_data_dict = es_client.get_shards_as_dict()
+                
+                if (args.format == 'json'):
+                    print(json.dumps(shards_data_dict))
+                else:
+                    es_client.print_table_shards(shards_data_dict)
+
         if (args.command == 'version'):
-                es_client.show_message_box("Version Info",f"Utility: escmd.py\nVersion: {VERSION}", message_style='bold white', panel_style='bold white')
+                es_client.show_message_box("Version Info",f"Utility: escmd.py\nVersion: {VERSION} ({DATE})", message_style='bold white', panel_style='bold white')
                 exit()
         
