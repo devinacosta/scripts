@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 '''
 Administration tool for Elastic Search, simplifies admin tasks.
-Version: 1.0.7 (04/21/2024)
+Version: 1.0.8 (04/22/2024)
 '''
-VERSION = '1.0.7'
-DATE = "04/21/2024"
+VERSION = '1.0.8'
+DATE = "04/22/2024"
 
 
 # Import Modules
@@ -90,6 +90,32 @@ class ElasticsearchClient:
                 table.add_row(index, shard_id, stage, source, target, shard_type)
 
         console.print(table)
+
+    def flush_synced_elasticsearch(self, host, port, use_ssl=False, authentication=False, username=None, password=None):
+        """
+        Issue a POST request to Elasticsearch's _flush/synced endpoint.
+
+        Args:
+        - host (str): The hostname or IP address of the Elasticsearch instance.
+        - port (int): The port number of the Elasticsearch instance.
+        - use_ssl (bool): Whether to use SSL/TLS for the connection.
+        - authentication (bool): Whether to use HTTP authentication.
+        - username (str): The username for HTTP authentication.
+        - password (str): The password for HTTP authentication.
+
+        Returns:
+        - dict: The JSON response from Elasticsearch.
+        """
+        scheme = 'https' if use_ssl else 'http'
+        url = f"{scheme}://{host}:{port}/_flush/synced"
+
+        if authentication:
+            response = requests.post(url, auth=(username, password))
+        else:
+            response = requests.post(url)
+
+        return response.json()
+
 
     def filter_nodes_by_role(self, nodes_list, role):
         filtered_nodes = []
@@ -378,7 +404,7 @@ class ElasticsearchClient:
 
     def print_table_shards(self, shards_info):
         console = Console()
-        table = Table(show_header=True, header_style="bold magenta")
+        table = Table(show_header=True, header_style="bold cyan")
         table.add_column("Index Name")
         table.add_column("Shard Number")
         table.add_column("Pri/Rep")
@@ -487,7 +513,8 @@ class ElasticsearchClient:
 
             settings = {
                 "transient": {
-                    "cluster.routing.allocation.enable": "all" 
+                    "cluster.routing.allocation.enable": None
+                    #"cluster.routing.allocation.enable": "all" 
                 }
             }
 
@@ -626,6 +653,7 @@ if __name__ == "__main__":
     # Nodes command
     allocation_parser = subparsers.add_parser('allocation', help='Actions for ES Allocation')
     current_master_parser = subparsers.add_parser('current-master', help='List Current Master')
+    flush_parser = subparsers.add_parser('flush', help='Perform Elasticsearch Flush')
     health_parser = subparsers.add_parser('health', help='Show Cluster Health')
     indices_parser = subparsers.add_parser('indices', help='Indices')
     masters_parser = subparsers.add_parser('masters', help='List ES Master nodes')
@@ -717,7 +745,6 @@ if __name__ == "__main__":
     elastic_port = location_to_use_dict.get('port', 9200)
     elastic_use_ssl = location_to_use_dict.get('use_ssl', False)
     elastic_repository = location_to_use_dict.get('repository', None)
-    #elastic_authentication = location_to_use_dict.get('elastic_authentication', False)
     elastic_username = location_to_use_dict.get('elastic_username', None)
     elastic_password = location_to_use_dict.get('elastic_password', None)
     elastic_authentication = location_to_use_dict.get('elastic_authentication', elastic_username is not None and elastic_password is not None)
@@ -794,6 +821,12 @@ if __name__ == "__main__":
             else:
                 print(f"Current Master is: [cyan]{master_node_id}[/cyan]")
 
+        if (args.command == 'flush'):
+            flushsync = es_client.flush_synced_elasticsearch(elastic_host, elastic_port, elastic_use_ssl, elastic_username, elastic_password)
+            message = flushsync['_shards']
+            es_client.show_message_box("ElasticSearch Flush", f"POST completed to _flush/synced\n{message}")
+            exit()
+
         if (args.command == 'nodes'):
             nodes = es_client.get_nodes()
 
@@ -866,7 +899,10 @@ if __name__ == "__main__":
             else:
                 cluster_settings = es_client.get_settings()
                 cluster_flattened = es_client.flatten_json(cluster_settings)
-                es_client.print_table_from_dict("Cluster Settings", cluster_flattened)
+                if (len(cluster_flattened) == 0):
+                    es_client.show_message_box("Settings","No settings found.", message_style='bold white', panel_style='bold white')
+                else:
+                    es_client.print_table_from_dict("Cluster Settings", cluster_flattened)
                 exit()
 
         if (args.command == 'storage'):

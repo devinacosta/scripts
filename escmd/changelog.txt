@@ -1,0 +1,8 @@
+## [1.0.8] - 2024-04-22
+ - Added Flush feature, to POST _flush/synced
+## [1.0.7] - 2024-04-21
+ - Added shards feature
+## [1.0.4] - 2024-04-17
+ - Fixed Missing Authentication, Now supports ES Authentication
+## [1.0.3] - 2024-04-16
+ - Changed output of nodes, indices to sort alphabetically by default
