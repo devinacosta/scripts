@@ -2,7 +2,7 @@
 """
 # Disk Cleanup Python Script
 # Written by Devin Acosta
-# Version 1.2.6 02/29/2024
+# Version 1.3.0 02/12/2025
 """
 
 # Import Libraries
@@ -14,12 +14,13 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import yaml
 from pathlib import Path
 
 # Initial Variables
 rc_files = {}
-SCRIPTVER = "1.2.6"
+SCRIPTVER = "1.3.0"
 
 """
 ABRT Functions
@@ -272,7 +273,7 @@ def advanced_cleanup_directory(directory, max_age_days, file_pattern):
                         continue
                     except Exception as e:
                         logging.info(f"[action][ERROR] : An error occured: {e}")
-            except  FileNotFoundError: 
+            except  FileNotFoundError:
                 logging.info(f"[action][ERROR] : File Not Found {file_path}")
                 continue
 
@@ -296,11 +297,11 @@ def directory_cleanup(directory):
             if itemTime < dir_max_fileage_tstamp:
                 # If Filename has the allowed extension then remove it ONLY
                 if check_filename_pattern(item):
-                    
+
                     try:
                         os.remove(item)
                         logging.info("[action][REMOVE] : Removing File %s, timestamp: %s" % (item,itemTime))
-                    except PermissionError: 
+                    except PermissionError:
                         logging.info("[action][DENIED] : Permission denied removing file %s" % (item))
 
 
@@ -349,14 +350,14 @@ def readConfig(filename):
     files_to_check = config['files']
     files_main_settings = config['main']
     directories_to_check = config['directories']
-    
+
     # Ensure each directory has max_fileage, if missing add default value
     for directory, values in directories_to_check.items():
         try:
             values['max_fileage']
         except:
             directories_to_check[directory]['max_fileage'] = files_main_settings['max_fileage']
-    
+
 
     return files_to_check, files_main_settings, directories_to_check
 
@@ -386,7 +387,7 @@ def partition_usage(path):
     total, used, free, percent = disk_usage(path)
 
     if total is None:
-        return 0, 0, 0 
+        return 0, 0, 0
 
     # Return Values
     return total, used, percent
@@ -432,6 +433,61 @@ def check_auditd(audit_percent=50):
         audit_scan_files(audit_path, disk_percent)
 
 
+def run_check_services(services):
+    """ Loop over each checked service to find open handles. """
+    for service in services:
+        logging.info(f"[services][check] : {service}, looking for open handles. ")
+        service_count = count_deleted_files_procfs(service)
+        logging.info(f"[services][{service}] : {service_count} deleted open file handles.")
+        if service_count > 0:
+            restart_service(service)
+
+
+# Count Deleted files for a program
+def count_deleted_files_procfs(program_name: str) -> int:
+    """
+    Counts deleted files by checking the /proc filesystem for a specific program name.
+
+    :param program_name: Name of the program to check.
+    :return: Number of deleted files found.
+    """
+    deleted_count = 0
+
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue  # Skip non-PID entries
+
+        try:
+            # Read the process name from /proc/{pid}/comm (reflects setproctitle)
+            with open(f"/proc/{pid}/comm", "r") as comm_file:
+                comm_name = comm_file.read().strip()
+
+            if comm_name != program_name:
+                continue  # Skip if it's not the target program
+
+            # Check open file descriptors
+            fd_path = f"/proc/{pid}/fd"
+            for fd in os.listdir(fd_path):
+                fd_target = os.readlink(os.path.join(fd_path, fd))
+                if "(deleted)" in fd_target:
+                    deleted_count += 1
+
+        except (FileNotFoundError, PermissionError):
+            continue  # Process might have ended or permission denied
+
+    return deleted_count
+
+
+# Restart service to release file handles.
+def restart_service(service_name: str):
+    """Restarts a systemd service using systemctl."""
+    try:
+        subprocess.run(["systemctl", "restart", service_name], check=True)
+        logging.info(f"[service][restart] : Service '{service_name}' restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"[service][restart] : Failed to restart service '{service_name}': {e}")
+
+
 # Main Script
 if __name__ == '__main__':
 
@@ -454,6 +510,7 @@ if __name__ == '__main__':
     abrt_maxsize = files_main_settings['abrt_maxsize']
     abrt_directory = files_main_settings['abrt_directory']
     LOGFILE = files_main_settings['log_file']
+    check_services = files_main_settings.get('check_services', [])
 
     # Adjust Log File Path based upon if it's specific or not
     if has_slashes(LOGFILE):
@@ -495,10 +552,15 @@ if __name__ == '__main__':
     # Perform ABRT Cleanups
     logging.info("[abrt][main] : Starting ABRT Cleanup...")
     logging.info(f"[abrt][settings]: Max Age: [{abrt_maxage}], Max Size: [{abrt_maxsize}]")
-    logging.info(f"[abrt][age] : Checking Crash Dumps by Age")
+    logging.info("[abrt][age] : Checking Crash Dumps by Age")
     delete_old_abrt_directories(abrt_directory, abrt_maxage)
-    logging.info(f"[abrt][size] : Checking Crash Dumps by Size")
+    logging.info("[abrt][size] : Checking Crash Dumps by Size")
     delete_abrt_directories_by_size(abrt_directory, abrt_maxsize)
+
+    # Check Services
+    if len(check_services) > 0:
+        logging.info("[services][main] : Checking for open file handles.")
+        run_check_services(check_services)
 
     # Script Exit
     logging.info('Disk Cleanup has been completed.')

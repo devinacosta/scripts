@@ -5,6 +5,7 @@ main:
   abrt_directory: /var/log/crash/abrt
   max_filesize: "2 GiB"
   max_fileage: 30
+  check_services: []
   file_extensions:
     - "tar.gz"
     - ".gz"
