@@ -2,7 +2,7 @@
 """
 # Disk Cleanup Python Script
 # Written by Devin Acosta
-# Version 1.3.0 02/12/2025
+# Version 1.3.2 07/10/2025
 """
 
 # Import Libraries
@@ -17,254 +17,259 @@ import shutil
 import subprocess
 import yaml
 from pathlib import Path
+from typing import Optional, Dict, Any, Tuple, List
 
 # Initial Variables
-rc_files = {}
-SCRIPTVER = "1.3.0"
+rc_files: Dict[str, Dict[str, int]] = {}
+SCRIPTVER = "1.3.2"
 
 """
 ABRT Functions
 """
 
-def extract_date_from_directory_name(directory_name):
-    # Replace colons with underscores to make the date format compatible with directory names
-    directory_name = directory_name.replace(':', '_')
+def extract_date_from_directory_name(directory_name: str) -> Optional[datetime.datetime]:
+    """
+    Extracts a datetime object from a directory name using a pattern like YYYY-MM-DD-HH-MM-SS.
+    Returns None if no date is found.
 
-    # Split the directory name by non-digit characters
-    date_parts = re.split(r'\D+', directory_name)
+    Args:
+        directory_name (str): The name of the directory.
 
-    # Attempt to parse date components (year, month, day, hour, minute, second)
-    try:
-        date_components = [int(part) for part in date_parts if part]
-        if len(date_components) >= 6:
-            return datetime.datetime(*date_components)
-    except ValueError:
-        pass
-
+    Returns:
+        Optional[datetime.datetime]: The extracted datetime object, or None if not found.
+    """
+    pattern = r'(\d{4})[-_](\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})'
+    match = re.search(pattern, directory_name)
+    if match:
+        try:
+            return datetime.datetime(*map(int, match.groups()))
+        except Exception:
+            return None
     return None
 
-def delete_old_abrt_directories(dump_dir, days_threshold):
-    try:
-        # Calculate the threshold date (x days ago from today)
-        threshold_date = datetime.datetime.now() - datetime.timedelta(days=days_threshold)
+def delete_old_abrt_directories(dump_dir: str, days_threshold: int) -> None:
+    """
+    Deletes ABRT directories older than a specified number of days.
 
-        # Iterate through the dump directory
+    Args:
+        dump_dir (str): The directory containing ABRT dumps.
+        days_threshold (int): The age threshold in days.
+    """
+    try:
+        threshold_date = datetime.datetime.now() - datetime.timedelta(days=days_threshold)
         for root, dirs, _ in os.walk(dump_dir):
             for dir_name in dirs:
                 dir_path = os.path.join(root, dir_name)
-
-                # Extract the date from the directory name
                 dir_date = extract_date_from_directory_name(dir_name)
-
-                if dir_date:
-                    # Check if the directory is older than the threshold
-                    if str(dir_date) < str(threshold_date):
-                        # Remove the entire directory and its contents
-                        shutil.rmtree(dir_path)
-                        logging.info(f"[abrt][delete] : Removed directory: {dir_path}")
-
+                if dir_date and dir_date < threshold_date:
+                    shutil.rmtree(dir_path)
+                    logging.info(f"[abrt][delete] : Removed directory: {dir_path}")
     except Exception as e:
         logging.error(f"Error deleting old ABRT directories: {e}")
 
-def delete_old_abrt_files(dump_dir, days_threshold):
-    try:
-        # Calculate the threshold date (x days ago from today)
-        threshold_date = datetime.datetime.now() - datetime.timedelta(days=days_threshold)
+def delete_old_abrt_files(dump_dir: str, days_threshold: int) -> None:
+    """
+    Deletes ABRT files older than a specified number of days and removes empty directories.
 
-        # Iterate through the dump directory
+    Args:
+        dump_dir (str): The directory containing ABRT dumps.
+        days_threshold (int): The age threshold in days.
+    """
+    try:
+        threshold_date = datetime.datetime.now() - datetime.timedelta(days=days_threshold)
         for root, _, files in os.walk(dump_dir):
             for file_name in files:
                 file_path = os.path.join(root, file_name)
-
-                # Get the file's modification timestamp
                 file_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
-
-                # Check if the file is older than the threshold
                 if file_timestamp < threshold_date:
-                    # Delete the file
                     os.remove(file_path)
                     logging.info(f"[abrt][delete] : Deleted: {file_path}")
-
-            # Check if the directory is empty
             if not os.listdir(root):
-                # Remove the empty directory
                 os.rmdir(root)
                 logging.info(f"[abrt][delete] : Removed empty directory: {root}")
     except Exception as e:
         logging.error(f"Error deleting old ABRT files: {e}")
 
-def convert_size_threshold(size_threshold):
-    # Regular expression to extract numeric value and unit (MB or GB)
-    match = re.match(r'^(\d+(?:\.\d+)?)\s*(MB|GB)$', size_threshold, re.IGNORECASE)
-    if match:
-        value = float(match.group(1))
-        unit = match.group(2).upper()
-        if unit == "MB":
-            return value * 1024**2
-        elif unit == "GB":
-            return value * 1024**3
-    else:
-        print("Invalid size format. Please use 'MB' or 'GB'.")
-        exit(1)
+def convert_size_to_bytes(size_str: str) -> int:
+    """
+    Converts a human-readable size string (e.g., '100M', '2 GiB', '1GB') to bytes.
 
-def delete_abrt_directories_by_size(dump_dir, size_threshold):
+    Args:
+        size_str (str): The size string to convert.
+
+    Returns:
+        int: The size in bytes.
+
+    Raises:
+        ValueError: If the size string format is invalid.
+    """
+    size_str = size_str.strip().replace(' ', '')
+    match = re.match(r'^(\d+(?:\.\d+)?)([KMGTP]?i?B?)$', size_str, re.IGNORECASE)
+    if not match:
+        logging.error("Invalid size format. Use formats like '100M', '2GiB', '1GB'.")
+        raise ValueError("Invalid size format.")
+    value, unit = match.groups()
+    value = float(value)
+    unit = unit.upper()
+    multipliers = {
+        'B': 1,
+        'K': 1024, 'KB': 1024, 'KIB': 1024,
+        'M': 1024**2, 'MB': 1024**2, 'MIB': 1024**2,
+        'G': 1024**3, 'GB': 1024**3, 'GIB': 1024**3,
+        'T': 1024**4, 'TB': 1024**4, 'TIB': 1024**4,
+        'P': 1024**5, 'PB': 1024**5, 'PIB': 1024**5,
+    }
+    return int(value * multipliers.get(unit, 1))
+
+def get_directory_size(path: str) -> int:
+    """
+    Recursively calculates the total size of a directory.
+
+    Args:
+        path (str): The directory path.
+
+    Returns:
+        int: The total size in bytes.
+    """
+    total_size = 0
+    for dirpath, _, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                total_size += os.path.getsize(fp)
+            except OSError:
+                continue
+    return total_size
+
+def delete_abrt_directories_by_size(dump_dir: str, size_threshold: str) -> None:
+    """
+    Deletes ABRT directories that exceed a specified size threshold.
+
+    Args:
+        dump_dir (str): The directory containing ABRT dumps.
+        size_threshold (str): The size threshold (e.g., '100M').
+    """
     try:
-        size_threshold_bytes = convert_size_threshold(size_threshold)
-
-        # Iterate through the dump directory
+        size_threshold_bytes = convert_size_to_bytes(size_threshold)
         for root, dirs, _ in os.walk(dump_dir, topdown=False):
             for dir_name in dirs:
                 dir_path = os.path.join(root, dir_name)
-
-                # Calculate the size of the directory
-                dir_size = sum(os.path.getsize(os.path.join(dir_path, file)) for file in os.listdir(dir_path))
-
-                # Check if the directory exceeds the size threshold
+                dir_size = get_directory_size(dir_path)
                 if dir_size > size_threshold_bytes:
-                    # Delete the directory and its contents
                     shutil.rmtree(dir_path)
                     logging.info(f"[abrt][delete] : Deleted directory over size limit: {dir_path}")
-
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logging.error(f"An error occurred: {e}")
 
-"""
-End of ABRT Functions
-"""
+def has_slashes(path: str) -> bool:
+    """
+    Checks if a path contains slashes.
 
-def has_slashes(path):
+    Args:
+        path (str): The path to check.
+
+    Returns:
+        bool: True if the path contains slashes, False otherwise.
+    """
     return '/' in path
 
+def truncate_log_file(filename: str, file_size: str) -> None:
+    """
+    Truncates a log file if it exceeds a specified size.
 
-"""
-Function to Truncate Log File (keep our logs from taking over OS)
-"""
-def truncate_log_file(filename, file_size):
-    # Convert human-readable size (e.g., 100M) to bytes
-    size_multiplier = {'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4}
+    Args:
+        filename (str): The log file path.
+        file_size (str): The maximum allowed file size (e.g., '100M').
+    """
     try:
-        size_unit = file_size[-1].upper()
-        size_value = int(file_size[:-1])
-        bytes_to_compare = size_value * size_multiplier[size_unit]
-    except (ValueError, KeyError):
-        raise ValueError("Invalid file size format. Use a format like '100M'.")
-
-    try:
-        # Check file size
+        bytes_to_compare = convert_size_to_bytes(file_size)
         actual_size = os.path.getsize(filename)
-
     except FileNotFoundError:
         actual_size = 0
-
     if actual_size > bytes_to_compare:
-        # Truncate the file
         with open(filename, 'r+') as file:
             file.truncate(bytes_to_compare)
+        logging.info(f"File '{filename}' truncated to {file_size}.")
 
-        print(f"File '{filename}' truncated to {file_size}.")
-    else:
-        pass
+def find_yaml_config() -> Optional[str]:
+    """
+    Finds a YAML configuration file matching the script name in the current directory.
 
-# Extract Date from Filename rather than file date/time
-def extract_date_from_directory_name(directory_name):
-    # Define a regular expression pattern to match the date part of the directory name
-    pattern = r'\d{4}-\d{2}-\d{2}'
-
-    # Search for the pattern in the directory name
-    match = re.search(pattern, directory_name)
-
-    if match:
-        # Extract and return the matched date
-        return match.group()
-    else:
-        # Return None if no date is found
-        return None
-
-
-# Find YML Configuration file
-def find_yaml_config():
-
-    # Get Script name, and look for YML that matches.
+    Returns:
+        Optional[str]: The path to the YAML config file, or None if not found.
+    """
     current_directory = os.path.abspath(os.path.dirname(__file__))
     script_prefix = os.path.basename(__file__).split('.')[0]
     full_script_prefix = f"{current_directory}/{script_prefix}"
-
-
-    # List of possible YAML filenames to check
     yaml_filenames = [f'{full_script_prefix}.yml', f'{full_script_prefix}.yaml']
-
     for filename in yaml_filenames:
         if os.path.isfile(filename):
             return filename
-
-    # If no matching file is found, return None
     return None
 
+def check_files(files: Dict[str, Any], files_main_settings: Dict[str, Any]) -> None:
+    """
+    Checks files for cleanup based on size limits and updates the global rc_files dictionary.
 
-# Check List of Files to see if any are actionable.
-# ie: needing disk cleanup.
-def check_files(files, files_main_settings):
-
+    Args:
+        files (Dict[str, Any]): Dictionary of files to check.
+        files_main_settings (Dict[str, Any]): Main settings for files.
+    """
     global rc_files
-
-    # Loop through files and obtain file info to perform action against.
     for file in files:
-
-        # Check if file has specific size limit if so use that instead of global value
         if (files[file] != {} ):
-            max_filesize = int(convert_to_bytes(files[file]))
+            max_filesize = int(convert_size_to_bytes(files[file]))
         else:
-            max_filesize = int(convert_to_bytes(files_main_settings['max_filesize']))
-
-        # Get Filesize
+            max_filesize = int(convert_size_to_bytes(files_main_settings['max_filesize']))
         fexist = os.path.exists(file)
-        if (fexist == True):
-            fsize = os.path.getsize(file)
-            rc_files[file] = { "file_size": fsize, "file_maxsize": max_filesize }
-            #print(file,fsize,max_filesize)
-        else:
-            rc_files[file] = { "file_size": 0, "file_maxsize": 0 }
-            #print(f"{file} does not exist, not details to capture.")
+        fsize = os.path.getsize(file) if fexist else 0
+        rc_files[file] = {"file_size": fsize, "file_maxsize": max_filesize}
 
+def truncate_file(filename: str) -> None:
+    """
+    Truncates a file to zero bytes using /dev/null.
 
-    # Updates Global pydict [rc_files] with all the info needed.
-    #print(rc_files)
+    Args:
+        filename (str): The file to truncate.
+    """
+    os.system(f"cat /dev/null > {filename}")
+    logging.info(f"truncate: File {filename} truncated to 0 bytes.")
 
-# Truncate File Function, uses /dev/null to clear file size to not affect open file handles.
-def truncate_file(filename):
-    global logging
+def check_filename_pattern(filename: str, file_extensions: List[str]) -> bool:
+    """
+    Checks if the filename matches any of the provided file extensions.
 
-    cmd = "cat /dev/null > %s" % filename
-    os.system(cmd)
-    logging.info("truncate: File %s truncated to 0 bytes." % filename)
+    Args:
+        filename (str): The filename to check.
+        file_extensions (List[str]): List of file extension patterns.
 
-
-# Check if the filename matches any of the file extensions
-def check_filename_pattern(filename):
-    global file_extensions
+    Returns:
+        bool: True if a match is found, False otherwise.
+    """
     check_filename = str(filename)
     for extension in file_extensions:
         if re.search(extension, check_filename):
             return True
     return False
 
+def advanced_cleanup_directory(directory: str, max_age_days: int, file_pattern: str) -> None:
+    """
+    Cleans up files in a directory matching a pattern and older than a specified age.
 
-# New Function to cleanup Directory advanced
-def advanced_cleanup_directory(directory, max_age_days, file_pattern):
+    Args:
+        directory (str): The directory to clean.
+        max_age_days (int): Maximum allowed file age in days.
+        file_pattern (str): Regex pattern for files to match.
+    """
     current_time = datetime.datetime.now()
-
     logging.info(f"[action][CHECK] : Performing Directory cleanup of directory: [{directory}], max_age_days: {max_age_days}")
     pattern = re.compile(file_pattern)
-
     for root, _, files in os.walk(directory):
-
         for filename in files:
             file_path = os.path.join(root, filename)
             try:
                 file_age = current_time - datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
-
                 if pattern.search(filename) and file_age.days > max_age_days:
-                    #logging.info(f"Found an old file: {file_path} (Age: {file_age.days} days)")
                     try:
                         os.remove(file_path)
                         logging.info(f"[action][REMOVE] : Removed old file {file_path} (Age: {file_age.days} days)")
@@ -277,93 +282,74 @@ def advanced_cleanup_directory(directory, max_age_days, file_pattern):
                 logging.info(f"[action][ERROR] : File Not Found {file_path}")
                 continue
 
-# Function to Cleanup old files found in directory over XX days old. Reads
-# from INI file default settings.
-def directory_cleanup(directory):
-    global max_fileage
-    global file_extensions
+def directory_cleanup(directory: str, max_fileage: int, file_extensions: List[str]) -> None:
+    """
+    Cleans up files in a directory older than a specified age and matching given extensions.
 
-    logging.info("[action][CHECK] : Starting Directory Cleanup scan of directory [%s], Max fileage: %s" % (directory,max_fileage))
-
-    # Pickup max_fileage from INI file and get timestamp of that time ago.
+    Args:
+        directory (str): The directory to clean.
+        max_fileage (int): Maximum allowed file age in days.
+        file_extensions (List[str]): List of file extension patterns.
+    """
+    logging.info(f"[action][CHECK] : Starting Directory Cleanup scan of directory [{directory}], Max fileage: {max_fileage}")
     dir_max_fileage = int(f"-{max_fileage}")
     dir_max_fileage_tstamp = arrow.now().shift(hours=-7).shift(days=dir_max_fileage)
-
-    # Loop through directory looking for files over XX age and remove.
     for item in Path(directory).glob('*'):
         if item.is_file():
             itemTime = arrow.get(item.stat().st_mtime)
-            # If Filename is older than max_fileage, then remove
             if itemTime < dir_max_fileage_tstamp:
-                # If Filename has the allowed extension then remove it ONLY
-                if check_filename_pattern(item):
-
+                if check_filename_pattern(item, file_extensions):
                     try:
                         os.remove(item)
-                        logging.info("[action][REMOVE] : Removing File %s, timestamp: %s" % (item,itemTime))
+                        logging.info(f"[action][REMOVE] : Removing File {item}, timestamp: {itemTime}")
                     except PermissionError:
-                        logging.info("[action][DENIED] : Permission denied removing file %s" % (item))
+                        logging.info(f"[action][DENIED] : Permission denied removing file {item}")
 
-
-
-# Loop through Files and cleanup what needs to be cleaned up.
-def disk_cleanup():
+def disk_cleanup() -> None:
+    """
+    Performs disk cleanup by truncating files that exceed their maximum allowed size.
+    """
     global rc_files
-    global logging
-
-    # Perform Disk Clean on Python Dictionary
     for file in rc_files:
         file_size = rc_files[file]['file_size']
         file_maxsize = rc_files[file]['file_maxsize']
-
-        # If file over max_size go ahead and delete
         if ((file_size >= file_maxsize) and file_size != 0):
-            logging.info("[action][CHECK] : File %s will be truncated because %s >= %s" % (file, file_size, file_maxsize))
+            logging.info(f"[action][CHECK] : File {file} will be truncated because {file_size} >= {file_maxsize}")
             truncate_file(file)
         else:
-            logging.info("[action][ENOENT] : Skip file %s" % file)
+            logging.info(f"[action][ENOENT] : Skip file {file}")
 
+def readConfig(filename: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """
+    Reads the YAML configuration file and returns its components.
 
-# Convert Disk Size (2 GiB to Bytes number for easier comparison)
-def convert_to_bytes(size_str):
-    '''
-    Converts torrent sizes to a common count in bytes.
-    '''
-    size_data = size_str.split()
+    Args:
+        filename (str): Path to the YAML configuration file.
 
-    multipliers = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB']
-
-    size_magnitude = float(size_data[0])
-    multiplier_exp = multipliers.index(size_data[1])
-    size_multiplier = 1024 ** multiplier_exp if multiplier_exp > 0 else 1
-
-    return size_magnitude * size_multiplier
-
-
-# Reads INI file and processes information in INI.
-def readConfig(filename):
-
-    # Parse YML configuration
+    Returns:
+        Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]: Files, main settings, and directories configs.
+    """
     with open(filename, 'r') as yaml_file:
         config = yaml.safe_load(yaml_file)
-
     files_to_check = config['files']
     files_main_settings = config['main']
     directories_to_check = config['directories']
-
-    # Ensure each directory has max_fileage, if missing add default value
     for directory, values in directories_to_check.items():
-        try:
-            values['max_fileage']
-        except:
+        if 'max_fileage' not in values:
             directories_to_check[directory]['max_fileage'] = files_main_settings['max_fileage']
-
-
     return files_to_check, files_main_settings, directories_to_check
 
-
-# Check if p1 and p2 are on the same partition, return True if they are, otherwise False
 def same_partition(p1, p2):
+    """
+    Checks if two paths are on the same partition.
+
+    Args:
+        p1 (str): First path.
+        p2 (str): Second path.
+
+    Returns:
+        bool: True if both paths are on the same partition, False otherwise.
+    """
     try:
         dev1 = os.stat(p1).st_dev
         dev2 = os.stat(p2).st_dev
@@ -371,8 +357,16 @@ def same_partition(p1, p2):
     except FileNotFoundError:
         return False
 
-
 def disk_usage(file):
+    """
+    Returns disk usage statistics for a given path.
+
+    Args:
+        file (str): Path to check.
+
+    Returns:
+        tuple: (total, used, free, percent) or (None, None, None, None) if not found.
+    """
     try:
         total, used, free = shutil.disk_usage(file)
         percent = round(((total - free) / total * 100),1)
@@ -380,61 +374,64 @@ def disk_usage(file):
     except FileNotFoundError:
         return None, None, None, None
 
-# Check path and return percent used.
 def partition_usage(path):
+    """
+    Returns disk usage statistics for a partition.
 
-    # Get Disk Statistics
+    Args:
+        path (str): Path to check.
+
+    Returns:
+        tuple: (total, used, percent) or (0, 0, 0) if not found.
+    """
     total, used, free, percent = disk_usage(path)
-
     if total is None:
         return 0, 0, 0
-
-    # Return Values
     return total, used, percent
 
-# Scan Directory for all Audit files and return filelist in array.
-def audit_scan_files(audit_path,disk_percent):
+def audit_scan_files(audit_path, disk_percent):
+    """
+    Scans and deletes audit log files until disk usage drops below 50%.
+
+    Args:
+        audit_path (str): Path to audit logs.
+        disk_percent (float): Current disk usage percent.
+    """
     audit_files = []
     for filename in glob.glob(f"{audit_path}/audit.log.*"):
         audit_files.append(filename)
-
     sorted_audit_files = sorted(audit_files)
-
-    # Do Loop while free space > 50% then delete a file
-    # Once under 50% stop deleting and exit
     current_disk_usage = disk_percent
     while (current_disk_usage > 50):
-
-        # Now delete a file and check disk percentage
         audit_last_file = sorted_audit_files.pop(-1)
         os.remove(audit_last_file)
-
-        # Update Disk Usage Information
         total, used, free, percent = disk_usage(audit_path)
         current_disk_usage = percent
         logging.info("[action][REMOVE] : Removing File %s, disk_percent_after_delete: %s" % (audit_last_file,current_disk_usage))
-
     logging.info('AuditD : Disk Cleanup has been completed.')
 
-
-# Main Function to do all /var/log/audit cleanup
 def check_auditd(audit_percent=50):
+    """
+    Checks and cleans up audit logs if disk usage exceeds a threshold.
 
+    Args:
+        audit_percent (int, optional): Disk usage percent threshold. Defaults to 50.
+    """
     audit_path = '/var/log/audit'
     disk_total, disk_used, disk_percent = partition_usage(audit_path)
     logging.info("[action][CHECK] : Starting Directory Cleanup scan of directory [%s], Disk_Percent: %s, Disk_Purge_Percent: %s%%" % (audit_path,disk_percent,audit_percent))
-
-    # If audit is not on different partition log about that
     if same_partition(audit_path,'/var/log') == True:
         logging.info("[action][SKIP] : /var/log/audit not on dedicated parition, skipping cleanup checks")
-
-    # If /var/log/audit on different partition than /var/log, and disk space over 50% then purge.
     if same_partition(audit_path,'/var/log') == False and disk_percent > int(audit_percent):
         audit_scan_files(audit_path, disk_percent)
 
-
 def run_check_services(services):
-    """ Loop over each checked service to find open handles. """
+    """
+    Checks each service for open deleted file handles and restarts if needed.
+
+    Args:
+        services (list): List of service names to check.
+    """
     for service in services:
         logging.info(f"[services][check] : {service}, looking for open handles. ")
         service_count = count_deleted_files_procfs(service)
@@ -442,45 +439,41 @@ def run_check_services(services):
         if service_count > 0:
             restart_service(service)
 
-
-# Count Deleted files for a program
 def count_deleted_files_procfs(program_name: str) -> int:
     """
     Counts deleted files by checking the /proc filesystem for a specific program name.
 
-    :param program_name: Name of the program to check.
-    :return: Number of deleted files found.
+    Args:
+        program_name (str): Name of the program to check.
+
+    Returns:
+        int: Number of deleted files found.
     """
     deleted_count = 0
-
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
-            continue  # Skip non-PID entries
-
+            continue
         try:
-            # Read the process name from /proc/{pid}/comm (reflects setproctitle)
             with open(f"/proc/{pid}/comm", "r") as comm_file:
                 comm_name = comm_file.read().strip()
-
             if comm_name != program_name:
-                continue  # Skip if it's not the target program
-
-            # Check open file descriptors
+                continue
             fd_path = f"/proc/{pid}/fd"
             for fd in os.listdir(fd_path):
                 fd_target = os.readlink(os.path.join(fd_path, fd))
                 if "(deleted)" in fd_target:
                     deleted_count += 1
-
         except (FileNotFoundError, PermissionError):
-            continue  # Process might have ended or permission denied
-
+            continue
     return deleted_count
 
-
-# Restart service to release file handles.
 def restart_service(service_name: str):
-    """Restarts a systemd service using systemctl."""
+    """
+    Restarts a systemd service using systemctl.
+
+    Args:
+        service_name (str): The name of the service to restart.
+    """
     try:
         subprocess.run(["systemctl", "restart", service_name], check=True)
         logging.info(f"[service][restart] : Service '{service_name}' restarted successfully.")
@@ -499,6 +492,11 @@ if __name__ == '__main__':
 
     # Init Config
     yml_config = find_yaml_config()
+    if yml_config is None:
+        logging.error("No YAML configuration file found. Exiting.")
+        print("No YAML configuration file found. Exiting.")
+        exit(1)
+
     files, files_main_settings, directories_to_check = readConfig(filename=yml_config)
 
     # Get Variables from INI
@@ -523,16 +521,16 @@ if __name__ == '__main__':
 
     # Initialize Logging
     logging.basicConfig(filename=LOGFILE_PATH, filemode='a', format='%(asctime)s|%(name)s|%(levelname)s| %(message)s', level=logging.INFO)
-    logging.info(f"{script_name} [ verison: {SCRIPTVER} ] - Starting...")
+    logging.info(f"{script_name} [ version: {SCRIPTVER} ] - Starting...")
     logging.info(f"{script_name} [ config_file: {yml_config} ]")
     logging.info("[settings][main]: %s" % files_main_settings)
     logging.info("[settings][directories]: %s" % directories_to_check)
     logging.info("[settings][files]: %s" % files)
-    check_files(files,files_main_settings)
+    check_files(files, files_main_settings)
 
     # Loop through each directory and check for old files
     for dir in dirtochk:
-        directory_cleanup(dir)
+        directory_cleanup(dir, max_fileage, file_extensions)
 
     # Do Disk Cleanup
     disk_cleanup()

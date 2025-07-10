@@ -1,5 +1,9 @@
 Changelog for diskcleanup.py
 ----------------------------
+1.3.2   (2025-07-10 00:00:00 -700)
+  * AI performed some refactoring of code, adding lots of comments.
+  * Removed a duplicate function found.
+  * Updated requirements.txt to latest PIP3 packages
 1.3.0   (2025-02-12 12:00:00 -0700)
   * Added service restart for apps hanging onto deleted open files.
     See diskcleanup.yaml, check_services feature
