@@ -1,10 +1,32 @@
 # diskcleanup.py
 
-This script is a very useful utility to help you keep your /var/log directory clean. It is a very powerful utility that has several capabilities.
+This script is a comprehensive disk cleanup utility designed to help maintain clean systems with intelligent file management and detailed reporting. The utility provides robust cleanup capabilities with comprehensive logging and metrics tracking.
 
-- Ability to cleanup individual directories (each with unique settings) to delete files older than XX number of days.
-- Monitor Log Files and truncate once they reach XX size (MiB, GiB, TiB)
-- Cleanup /var/log/audit directory once it achieves XX disk space usage and bring down to 50%.
+## Features
+
+- **Directory Cleanup**: Remove files older than specified age with configurable file extension patterns
+- **Log File Management**: Monitor and truncate log files when they exceed size limits  
+- **ABRT Crash Management**: Clean up crash dumps based on age and size thresholds
+- **Pattern-Based Cleanup**: Advanced directory cleanup with regex pattern matching
+- **Audit Log Management**: Cleanup audit logs when disk usage exceeds thresholds
+- **Service Management**: Detect and restart services with deleted file handles
+- **Dry-Run Support**: Preview cleanup operations without making changes
+- **Rich Logging**: Detailed operation tracking with correlation IDs and metrics
+- **Health Monitoring**: Before/after system health comparison
+
+## Architecture
+
+The application uses a modular 3-file architecture:
+- `diskcleanup.py` - Main orchestration script
+- `diskcleanup_core.py` - Core business logic and cleanup functions  
+- `diskcleanup_logging.py` - Logging infrastructure and metrics
+
+## Testing
+
+Comprehensive test scripts are provided to validate all cleanup functionality:
+- `generate_test_files.sh` - Creates test files for all cleanup scenarios
+- `cleanup_test_files.sh` - Removes all test files after validation
+- `TEST_SCRIPTS_USAGE.md` - Complete testing documentation
 
 
 ## Installation of Python Modules
@@ -15,12 +37,50 @@ Install required Python Modules using the requirements.txt, Requires Python 3.6+
 pip3 -r requirements.txt
 ```
 
+## Usage
+
+### Command Line Options
+
+```bash
+# Standard cleanup
+sudo python diskcleanup.py
+
+# Dry-run mode (preview only)
+sudo python diskcleanup.py --dry-run
+
+# Custom configuration file
+sudo python diskcleanup.py --config /path/to/config.yaml
+
+# Verbose output
+sudo python diskcleanup.py --verbose
+```
+
+### Testing Your Configuration
+
+```bash
+# 1. Generate test files
+sudo ./generate_test_files.sh
+
+# 2. Run cleanup (dry-run first recommended)
+sudo python diskcleanup.py --dry-run
+
+# 3. Run actual cleanup
+sudo python diskcleanup.py
+
+# 4. Clean up test files
+sudo ./cleanup_test_files.sh
+```
+
 ## Installation (using CRONTAB)
 
-It is assumed that you will run the script on some cadence using CRON, you can install the files into any directory that you like (ie: /opt/diskc
+For automated cleanup, install via CRON:
 
-```python
+```bash
+# Hourly cleanup
 00 * * * * /opt/diskcleanup/diskcleanup.py
+
+# Daily cleanup with logging
+00 2 * * * /opt/diskcleanup/diskcleanup.py 2>&1 | logger -t diskcleanup
 ```
 
 ## YAML Configuration
