@@ -513,16 +513,25 @@ def check_system_health() -> Dict[str, Dict[str, Union[str, int, float]]]:
         
         for line in lines:
             parts = line.split()
+            # Handle both Linux (6 columns) and macOS (8+ columns) df output formats
             if len(parts) >= 6:
                 filesystem = parts[0]
                 size = parts[1]
                 used = parts[2]
                 available = parts[3]
                 percent_used_str = parts[4].rstrip('%')
-                mount_point = parts[5]
                 
-                # Skip special filesystems
-                if mount_point.startswith(('/dev', '/sys', '/proc', '/run')) or filesystem.startswith('tmpfs'):
+                # macOS df -h shows: Filesystem Size Used Avail Capacity iused ifree %iused Mounted_on
+                # Linux df -h shows: Filesystem Size Used Avail Use% Mounted_on
+                if len(parts) >= 8:  # macOS format with inode columns
+                    mount_point = parts[8] if len(parts) > 8 else parts[7]
+                else:  # Linux format
+                    mount_point = parts[5]
+                
+                # Skip special filesystems and invalid mount points
+                if (mount_point.startswith(('/dev', '/sys', '/proc', '/run')) or 
+                    filesystem.startswith('tmpfs') or 
+                    mount_point in ['-', 'none']):
                     continue
                 
                 try:
@@ -590,8 +599,17 @@ def same_partition(path1: str, path2: str) -> bool:
         return False
 
 def calculate_space_freed(health_before: Dict, health_after: Dict) -> int:
-    """Calculate actual space freed based on health data."""
+    """
+    Calculate actual space freed based on health data.
+    
+    Note: df -h uses rounded values (e.g., 1.2G, 456M) which may not detect
+    small changes accurately. This function attempts to calculate based on
+    the 'used' field differences, but may return 0 for small cleanups due
+    to rounding precision in df output.
+    """
     total_freed = 0
+    detected_changes = False
+    
     for mount_point in health_before:
         if mount_point in health_after:
             try:
@@ -603,9 +621,21 @@ def calculate_space_freed(health_before: Dict, health_after: Dict) -> int:
                 after_bytes = convert_size_to_bytes(used_after)
                 
                 if before_bytes > after_bytes:
-                    total_freed += (before_bytes - after_bytes)
-            except (KeyError, ValueError):
+                    freed_amount = before_bytes - after_bytes
+                    total_freed += freed_amount
+                    detected_changes = True
+                    log.debug(logger.system(f"detected space freed on {mount_point}", 
+                                          before=used_before, after=used_after, 
+                                          freed=format_size(freed_amount)))
+            except (KeyError, ValueError) as e:
+                log.debug(logger.system(f"could not calculate space freed for {mount_point}", 
+                                      error=str(e)))
                 continue
+    
+    if not detected_changes:
+        log.debug(logger.system("df -h precision insufficient to detect space freed", 
+                              note="This is normal for small cleanups on large filesystems"))
+    
     return total_freed
 
 # Audit Functions
@@ -768,6 +798,21 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
             improvement = before_pct - after_pct
             improvement_str = f"-{improvement:.1f}%" if improvement > 0 else "0%"
             
+            # Calculate space freed for this specific mount point
+            mount_space_freed = 0
+            try:
+                used_before = health_before[mount_point]['used']
+                used_after = health_after[mount_point]['used']
+                
+                # Convert human readable sizes to bytes for calculation
+                before_bytes = convert_size_to_bytes(used_before)
+                after_bytes = convert_size_to_bytes(used_after)
+                
+                if before_bytes > after_bytes:
+                    mount_space_freed = before_bytes - after_bytes
+            except (KeyError, ValueError):
+                mount_space_freed = 0
+            
             # Get status indicators
             before_status = health_before[mount_point]['status']
             after_status = health_after[mount_point]['status']
@@ -776,11 +821,20 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
             before_color = {"Good": "green", "Caution": "yellow", "Warning": "orange", "Critical": "red"}.get(before_status, "white")
             after_color = {"Good": "green", "Caution": "yellow", "Warning": "orange", "Critical": "red"}.get(after_status, "white")
             
+            # Show per-mount-point space freed if detected, or proportional share if not detected
+            if mount_space_freed > 0:
+                freed_display = format_size(mount_space_freed)
+            elif improvement > 0:
+                # If we can't detect actual space freed but percentage improved, show proportional
+                freed_display = f"~{format_size(space_freed // len([mp for mp in health_before.keys() if mp in health_after]))}"
+            else:
+                freed_display = "0 B"
+            
             table.add_row(
                 mount_point,
                 f"[{before_color}]{before_pct}% ({before_status})[/{before_color}]",
                 f"[{after_color}]{after_pct}% ({after_status})[/{after_color}]",
-                format_size(space_freed) if improvement > 0 else "0 B",
+                freed_display,
                 f"[bold green]{improvement_str}[/bold green]" if improvement > 0 else "[dim]0%[/dim]"
             )
     

@@ -167,6 +167,9 @@ def main():
     with OperationContext("dir_cleanup", "cleanup", f"scanning_{len(dirtochk)}_dirs") as metrics:
         start_files = diskcleanup_core.global_metrics.files_processed
         start_dirs = diskcleanup_core.global_metrics.directories_processed
+        diskcleanup_core.log.info(logger_helper.system("Directory cleanup configuration", 
+                              directories=len(dirtochk), max_age=max_fileage, 
+                              extensions=file_extensions, targets=dirtochk))
         for dir in dirtochk:
             space = directory_cleanup(dir, max_fileage, file_extensions, args.dry_run)
             total_space_freed += space
@@ -186,6 +189,9 @@ def main():
     with OperationContext("file_truncate", "files", f"checking_{len(files)}_files") as metrics:
         start_files = diskcleanup_core.global_metrics.files_processed
         start_dirs = diskcleanup_core.global_metrics.directories_processed
+        diskcleanup_core.log.info(logger_helper.system("File truncation configuration", 
+                              monitored_files=len(files), 
+                              max_size=files_main_settings["max_filesize"]))
         if not args.dry_run:
             space = disk_cleanup()
             total_space_freed += space
@@ -209,6 +215,9 @@ def main():
     with OperationContext("pattern_cleanup", "cleanup", f"scanning_{len(directories_to_check)}_pattern_dirs") as metrics:
         start_files = diskcleanup_core.global_metrics.files_processed
         start_dirs = diskcleanup_core.global_metrics.directories_processed
+        diskcleanup_core.log.info(logger_helper.system("Pattern cleanup configuration", 
+                              directories=len(directories_to_check), 
+                              targets=list(directories_to_check.keys())))
         for directory in directories_to_check:
             # Use directory-specific max_fileage or fall back to global default
             dir_max_fileage = directories_to_check[directory].get('max_fileage', max_fileage)
@@ -235,7 +244,7 @@ def main():
     with OperationContext("abrt_cleanup", "abrt", abrt_directory.replace('/', '_')) as metrics:
         start_files = diskcleanup_core.global_metrics.files_processed
         start_dirs = diskcleanup_core.global_metrics.directories_processed
-        diskcleanup_core.log.info(logger_helper.system("Starting ABRT cleanup", 
+        diskcleanup_core.log.info(logger_helper.system("ABRT cleanup configuration", 
                               max_age=abrt_maxage, max_size=abrt_maxsize))
         diskcleanup_core.log.info(logger_helper.system("checking crash dumps by age"))
         space_age = delete_old_abrt_directories(abrt_directory, abrt_maxage, args.dry_run)
@@ -308,7 +317,27 @@ def main():
         console.rule("[bold green]✅ Cleanup Complete - Results Summary", style="green")
         
         actual_space_freed = calculate_space_freed(health_before, health_after)
-        space_freed_display = actual_space_freed if actual_space_freed > 0 else total_space_freed
+        
+        # Use df-calculated space freed if it's meaningful, otherwise use tracked total
+        # If tracked amount is significant but df shows very little, it's likely a rounding error
+        threshold = max(1024 * 1024, total_space_freed * 0.1)  # 1MB or 10% of tracked amount, whichever is larger
+        
+        if actual_space_freed > threshold and total_space_freed > 0:
+            space_freed_display = actual_space_freed
+            diskcleanup_core.log.debug(logger_helper.system("Using df-calculated space freed", 
+                                      calculated=format_size(actual_space_freed),
+                                      tracked=format_size(total_space_freed)))
+        else:
+            space_freed_display = total_space_freed
+            if actual_space_freed > 0 and actual_space_freed <= threshold:
+                diskcleanup_core.log.debug(logger_helper.system("df calculation too small compared to tracked, using tracked total", 
+                                          df_calculated=format_size(actual_space_freed),
+                                          tracked=format_size(total_space_freed),
+                                          note="df -h rounding may cause small false positives"))
+            else:
+                diskcleanup_core.log.debug(logger_helper.system("df precision insufficient, using tracked total", 
+                                          tracked=format_size(total_space_freed),
+                                          note="df -h may not detect small changes on large filesystems"))
         
         print_health_comparison(health_before, health_after, execution_time, space_freed_display)
         
@@ -329,4 +358,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 

@@ -5,7 +5,8 @@ main:
   abrt_directory: /var/log/crash/abrt
   max_filesize: "2 GiB"
   max_fileage: 30
-  check_services: []
+  check_services:
+    []
   file_extensions:
     - "tar.gz"
     - ".gz"
@@ -22,11 +23,9 @@ files:
   "/var/log/kibana/kibana.log": {}
 
 directories:
-  "/root/Python/ai-diskcleanup/random_directories/directory_1":
-    file_pattern: "[log_.*\\.log|file_.*\\*.pdf]"
-  "/root/Python/ai-diskcleanup/random_directories/directory_2":
-    max_fileage: 3
-    file_pattern: "file_.*\\.pdf"
-  "/var/log/kibana-2":
+  "/var/log/haproxy":
+    max_fileage: 10
+    file_pattern: "haproxy-.*"
+  "/var/log/kibana-1":
     max_fileage: 3
     file_pattern: "kibana-.*"
