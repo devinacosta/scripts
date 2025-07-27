@@ -4,7 +4,7 @@ Disk Cleanup Utility - Core Functions Module
 
 This module contains all the core business logic including:
 - Configuration management and validation
-- File and directory cleanup operations  
+- File and directory cleanup operations
 - ABRT crash dump management
 - System health monitoring
 - Service management
@@ -46,7 +46,8 @@ global_metrics = None  # Will be set by main script
 
 # Global variables
 rc_files: Dict[str, Dict[str, int]] = {}
-SCRIPTVER = "2.0.4"
+SCRIPTVER = "2.0.5"
+SCRIPTDATE = "2025-07-26"
 
 @dataclass
 class CleanupConfig:
@@ -62,13 +63,13 @@ class CleanupConfig:
     directories_to_check: List[str]
     file_extensions: List[str]
     check_services: List[str]
-    
+
     # Files to monitor
     files: Dict[str, Any]
-    
+
     # Advanced directory settings
     directories: Dict[str, Dict[str, Any]]
-    
+
     @classmethod
     def from_config_dict(cls, files: Dict[str, Any], main: Dict[str, Any], directories: Dict[str, Any]) -> 'CleanupConfig':
         """Create CleanupConfig from configuration dictionaries."""
@@ -104,15 +105,15 @@ def convert_size_to_bytes(size_str: str) -> int:
     size_str = size_str.strip()
     if not size_str:
         return 0
-    
+
     # Extract number and unit
     match = re.match(r'^(\d+(?:\.\d+)?)\s*([KMGT]?i?B?)$', size_str, re.IGNORECASE)
     if not match:
         raise ValueError(f"Invalid size format: {size_str}")
-    
+
     number = float(match.group(1))
     unit = match.group(2).upper()
-    
+
     # Convert to bytes based on unit
     multipliers = {
         'B': 1,
@@ -121,7 +122,7 @@ def convert_size_to_bytes(size_str: str) -> int:
         'GB': 1024**3, 'GIB': 1024**3,
         'TB': 1024**4, 'TIB': 1024**4
     }
-    
+
     if unit in multipliers:
         return int(number * multipliers[unit])
     else:
@@ -169,10 +170,10 @@ def delete_old_abrt_directories(abrt_directory: str, max_age_days: int, dry_run:
     if not os.path.exists(abrt_directory):
         log.warning(logger.system(f"ABRT directory does not exist: {abrt_directory}"))
         return 0
-    
+
     space_freed = 0
     threshold_date = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
-    
+
     try:
         for dump_dir in os.listdir(abrt_directory):
             dir_path = os.path.join(abrt_directory, dump_dir)
@@ -185,19 +186,19 @@ def delete_old_abrt_directories(abrt_directory: str, max_age_days: int, dry_run:
                         freed = simulate_cleanup(dir_path)
                         space_freed += freed
                         global_metrics.add_directory(freed)
-                        log.info(logger.dry_run(f"remove directory {dir_path}", 
+                        log.info(logger.dry_run(f"remove directory {dir_path}",
                                                size=format_size(freed), operation="age_cleanup"))
                     else:
                         freed = simulate_cleanup(dir_path)
                         space_freed += freed
                         shutil.rmtree(dir_path)
                         global_metrics.add_directory()
-                        log.info(logger.action(f"removed directory {dir_path}", 
+                        log.info(logger.action(f"removed directory {dir_path}",
                                               size=format_size(freed), operation="age_cleanup"))
     except Exception as e:
         log.error(logger.error_with_context(abrt_directory, e))
         global_metrics.add_error()
-    
+
     return space_freed
 
 def cleanup_empty_abrt_directories(abrt_directory: str) -> None:
@@ -210,14 +211,14 @@ def cleanup_empty_abrt_directories(abrt_directory: str) -> None:
                 try:
                     file_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
                     threshold_date = datetime.datetime.now() - datetime.timedelta(days=30)
-                    
+
                     if file_timestamp < threshold_date:
                         os.remove(file_path)
                         log.info(logger.action(f"deleted file {file_path}"))
                         global_metrics.add_file()
                 except Exception:
                     continue
-            
+
             # Remove empty directories
             if not os.listdir(root):
                 os.rmdir(root)
@@ -231,10 +232,10 @@ def delete_abrt_directories_by_size(abrt_directory: str, max_size: str, dry_run:
     """Delete ABRT directories when total size exceeds max_size."""
     if not os.path.exists(abrt_directory):
         return 0
-    
+
     size_threshold_bytes = convert_size_to_bytes(max_size)
     space_freed = 0
-    
+
     try:
         directories_with_sizes = []
         for dump_dir in os.listdir(abrt_directory):
@@ -249,29 +250,29 @@ def delete_abrt_directories_by_size(abrt_directory: str, max_size: str, dry_run:
                     directories_with_sizes.append((dir_path, dir_size))
                 except (OSError, IOError):
                     continue
-        
+
         # Sort by size (largest first) and delete until under threshold
         directories_with_sizes.sort(key=lambda x: x[1], reverse=True)
         total_size = sum(size for _, size in directories_with_sizes)
-        
+
         for dir_path, dir_size in directories_with_sizes:
             if total_size > size_threshold_bytes:
                 if dry_run:
                     space_freed += dir_size
                     global_metrics.add_directory(dir_size)
-                    log.info(logger.dry_run(f"remove directory over size limit {dir_path}", 
+                    log.info(logger.dry_run(f"remove directory over size limit {dir_path}",
                                            size=format_size(dir_size), operation="size_cleanup"))
                 else:
                     shutil.rmtree(dir_path)
                     space_freed += dir_size
                     global_metrics.add_directory()
-                    log.info(logger.action(f"deleted directory over size limit {dir_path}", 
+                    log.info(logger.action(f"deleted directory over size limit {dir_path}",
                                           size=format_size(dir_size)))
                 total_size -= dir_size
     except Exception as e:
         log.error(logger.error_with_context(dump_dir, e))
         global_metrics.add_error()
-    
+
     return space_freed
 
 # File Operations
@@ -301,7 +302,7 @@ def find_yaml_config() -> Optional[str]:
         os.path.join(current_dir, 'config.yaml'),
         os.path.join(current_dir, 'config.yml')
     ]
-    
+
     for config_path in possible_configs:
         if os.path.exists(config_path):
             return config_path
@@ -335,26 +336,26 @@ def advanced_cleanup_directory(directory: str, max_age_days: int, file_pattern: 
     if not os.path.exists(directory):
         log.warning(f"Directory does not exist: {directory}")
         return 0
-    
+
     space_freed = 0
     current_time = datetime.datetime.now()
     threshold_date = current_time - datetime.timedelta(days=max_age_days)
-    
+
     log.info(logger.system(f"starting directory cleanup for {directory}",
                           max_age=max_age_days, pattern=file_pattern))
-    
+
     try:
         pattern = re.compile(file_pattern)
         directory_path = Path(directory)
-        
+
         if not directory_path.exists():
             log.warning(f"Directory does not exist: {directory}")
             return 0
-        
+
         # Use pathlib's rglob for more efficient recursive search with sampling
         sampler = LogSampler(50)  # Log every 50th file for large operations
         files_processed = 0
-        
+
         for file_path in directory_path.rglob('*'):
             if file_path.is_file():
                 files_processed += 1
@@ -364,19 +365,19 @@ def advanced_cleanup_directory(directory: str, max_age_days: int, file_pattern: 
                         if file_mtime < threshold_date:
                             file_size = file_path.stat().st_size
                             age_days = (current_time - file_mtime).days
-                            
+
                             if dry_run:
                                 space_freed += file_size
                                 global_metrics.add_file(file_size)
                                 if sampler.should_log():
-                                    log.info(logger.dry_run(f"remove file {file_path}", 
+                                    log.info(logger.dry_run(f"remove file {file_path}",
                                                            age_days=age_days, size=format_size(file_size)))
                             else:
                                 file_path.unlink()
                                 space_freed += file_size
                                 global_metrics.add_file(file_size)
                                 if sampler.should_log():
-                                    log.info(logger.action(f"removed old file {file_path}", 
+                                    log.info(logger.action(f"removed old file {file_path}",
                                                           age_days=age_days, size=format_size(file_size)))
                         # Progress logging for large operations
                         if files_processed % 1000 == 0:
@@ -386,14 +387,14 @@ def advanced_cleanup_directory(directory: str, max_age_days: int, file_pattern: 
                     log.debug(logger.error_with_context(str(file_path), e))
                     global_metrics.add_error()
                     continue
-                    
-        log.info(logger.system(f"completed cleanup for {directory}", 
+
+        log.info(logger.system(f"completed cleanup for {directory}",
                               files_processed=files_processed, space_freed=format_size(space_freed)))
-        
+
     except Exception as e:
         log.error(logger.error_with_context(directory, e))
         global_metrics.add_error()
-    
+
     return space_freed
 
 def directory_cleanup(directory: str, max_fileage: int, file_extensions: List[str], dry_run: bool = False) -> int:
@@ -403,12 +404,12 @@ def directory_cleanup(directory: str, max_fileage: int, file_extensions: List[st
     space_freed = 0
     log.info(logger.system(f"starting cleanup for {directory}",
                           max_age=max_fileage, extensions=file_extensions))
-    
+
     dir_max_fileage = int(f"-{max_fileage}")
     dir_max_fileage_tstamp = arrow.now().shift(hours=-7).shift(days=dir_max_fileage)
-    
+
     sampler = LogSampler(25)  # Log every 25th file
-    
+
     for item in Path(directory).glob('*'):
         if item.is_file():
             itemTime = arrow.get(item.stat().st_mtime)
@@ -421,14 +422,14 @@ def directory_cleanup(directory: str, max_fileage: int, file_extensions: List[st
                             space_freed += file_size
                             global_metrics.add_file(file_size)
                             if sampler.should_log():
-                                log.info(logger.dry_run(f"remove file {item}", 
+                                log.info(logger.dry_run(f"remove file {item}",
                                                        age_days=age_days, size=format_size(file_size)))
                         else:
                             os.remove(item)
                             space_freed += file_size
                             global_metrics.add_file(file_size)
                             if sampler.should_log():
-                                log.info(logger.action(f"removed file {item}", 
+                                log.info(logger.action(f"removed file {item}",
                                                       age_days=age_days, size=format_size(file_size)))
                     except PermissionError:
                         log.warning(logger.system(f"permission denied removing file {item}"))
@@ -446,13 +447,13 @@ def disk_cleanup() -> int:
         file_size = rc_files[file]['file_size']
         file_maxsize = rc_files[file]['file_maxsize']
         if ((file_size >= file_maxsize) and file_size != 0):
-            log.info(logger.action(f"truncating file {file}", 
-                                  current_size=format_size(file_size), 
+            log.info(logger.action(f"truncating file {file}",
+                                  current_size=format_size(file_size),
                                   max_size=format_size(file_maxsize)))
             space_freed += file_size
             truncate_file(file)
         else:
-            log.debug(logger.system(f"skipping file {file} (within size limit)", 
+            log.debug(logger.system(f"skipping file {file} (within size limit)",
                                    current_size=format_size(file_size)))
     return space_freed
 
@@ -461,12 +462,12 @@ def readConfig(filename: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str,
     try:
         with open(filename, 'r') as yaml_file:
             config = yaml.safe_load(yaml_file)
-            
+
         required_keys = ['files', 'main', 'directories']
         missing_keys = [key for key in required_keys if key not in config]
         if missing_keys:
             raise KeyError(f"Missing required configuration sections: {', '.join(missing_keys)}")
-            
+
         return config['files'], config['main'], config['directories']
     except yaml.YAMLError as e:
         if log is not None:
@@ -481,18 +482,18 @@ def setup_rc_files(files: Dict[str, Any], max_filesize: str) -> None:
     """Set up the global rc_files dictionary."""
     global rc_files
     rc_files = {}
-    
+
     for filename, file_config in files.items():
         try:
             file_size = os.path.getsize(filename) if os.path.exists(filename) else 0
-            
+
             if isinstance(file_config, dict) and file_config:
                 file_maxsize = convert_size_to_bytes(file_config.get('max_size', max_filesize))
             elif isinstance(file_config, str):
                 file_maxsize = convert_size_to_bytes(file_config)
             else:
                 file_maxsize = convert_size_to_bytes(max_filesize)
-            
+
             rc_files[filename] = {
                 'file_size': file_size,
                 'file_maxsize': file_maxsize
@@ -505,12 +506,12 @@ def setup_rc_files(files: Dict[str, Any], max_filesize: str) -> None:
 def check_system_health() -> Dict[str, Dict[str, Union[str, int, float]]]:
     """Check system health including disk usage for all mount points."""
     health_data = {}
-    
+
     try:
         # Get all mount points
         result = subprocess.run(['df', '-h'], capture_output=True, text=True, check=True)
         lines = result.stdout.strip().split('\n')[1:]  # Skip header
-        
+
         for line in lines:
             parts = line.split()
             # Handle both Linux (6 columns) and macOS (8+ columns) df output formats
@@ -520,25 +521,25 @@ def check_system_health() -> Dict[str, Dict[str, Union[str, int, float]]]:
                 used = parts[2]
                 available = parts[3]
                 percent_used_str = parts[4].rstrip('%')
-                
+
                 # macOS df -h shows: Filesystem Size Used Avail Capacity iused ifree %iused Mounted_on
                 # Linux df -h shows: Filesystem Size Used Avail Use% Mounted_on
                 if len(parts) >= 8:  # macOS format with inode columns
                     mount_point = parts[8] if len(parts) > 8 else parts[7]
                 else:  # Linux format
                     mount_point = parts[5]
-                
+
                 # Skip special filesystems and invalid mount points
-                if (mount_point.startswith(('/dev', '/sys', '/proc', '/run')) or 
-                    filesystem.startswith('tmpfs') or 
+                if (mount_point.startswith(('/dev', '/sys', '/proc', '/run')) or
+                    filesystem.startswith('tmpfs') or
                     mount_point in ['-', 'none']):
                     continue
-                
+
                 try:
                     percent_used = int(percent_used_str)
                 except ValueError:
                     percent_used = 0
-                
+
                 health_data[mount_point] = {
                     'filesystem': filesystem,
                     'size': size,
@@ -551,7 +552,7 @@ def check_system_health() -> Dict[str, Dict[str, Union[str, int, float]]]:
         log.error(logger.error_with_context("df command", e))
     except Exception as e:
         log.error(logger.error_with_context("system health check", e))
-    
+
     return health_data
 
 def get_health_status(percent_used: int) -> str:
@@ -601,7 +602,7 @@ def same_partition(path1: str, path2: str) -> bool:
 def calculate_space_freed(health_before: Dict, health_after: Dict) -> int:
     """
     Calculate actual space freed based on health data.
-    
+
     Note: df -h uses rounded values (e.g., 1.2G, 456M) which may not detect
     small changes accurately. This function attempts to calculate based on
     the 'used' field differences, but may return 0 for small cleanups due
@@ -609,33 +610,33 @@ def calculate_space_freed(health_before: Dict, health_after: Dict) -> int:
     """
     total_freed = 0
     detected_changes = False
-    
+
     for mount_point in health_before:
         if mount_point in health_after:
             try:
                 used_before = health_before[mount_point]['used']
                 used_after = health_after[mount_point]['used']
-                
+
                 # Convert human readable sizes to bytes for calculation
                 before_bytes = convert_size_to_bytes(used_before)
                 after_bytes = convert_size_to_bytes(used_after)
-                
+
                 if before_bytes > after_bytes:
                     freed_amount = before_bytes - after_bytes
                     total_freed += freed_amount
                     detected_changes = True
-                    log.debug(logger.system(f"detected space freed on {mount_point}", 
-                                          before=used_before, after=used_after, 
+                    log.debug(logger.system(f"detected space freed on {mount_point}",
+                                          before=used_before, after=used_after,
                                           freed=format_size(freed_amount)))
             except (KeyError, ValueError) as e:
-                log.debug(logger.system(f"could not calculate space freed for {mount_point}", 
+                log.debug(logger.system(f"could not calculate space freed for {mount_point}",
                                       error=str(e)))
                 continue
-    
+
     if not detected_changes:
-        log.debug(logger.system("df -h precision insufficient to detect space freed", 
+        log.debug(logger.system("df -h precision insufficient to detect space freed",
                               note="This is normal for small cleanups on large filesystems"))
-    
+
     return total_freed
 
 # Audit Functions
@@ -648,16 +649,16 @@ def audit_scan_files(audit_path, disk_percent):
         audit_files.append(filename)
     sorted_audit_files = sorted(audit_files)
     current_disk_usage = disk_percent
-    
+
     while current_disk_usage > 50 and sorted_audit_files:
         audit_last_file = sorted_audit_files.pop(-1)
         os.remove(audit_last_file)
         total, used, free, percent = disk_usage(audit_path)
         current_disk_usage = percent
-        log.info(logger.action(f"removed file {audit_last_file}", 
+        log.info(logger.action(f"removed file {audit_last_file}",
                                disk_usage_after=f"{current_disk_usage}%"))
         global_metrics.add_file()
-    
+
     log.info(logger.system("disk cleanup completed"))
 
 def check_auditd(audit_percent=50):
@@ -666,10 +667,10 @@ def check_auditd(audit_percent=50):
     """
     audit_path = '/var/log/audit'
     disk_total, disk_used, disk_percent = partition_usage(audit_path)
-    
-    log.info(logger.system(f"starting audit cleanup for {audit_path}", 
+
+    log.info(logger.system(f"starting audit cleanup for {audit_path}",
                           current_usage=f"{disk_percent}%", threshold=f"{audit_percent}%"))
-    
+
     if same_partition(audit_path,'/var/log'):
         log.warning(logger.system("/var/log/audit not on dedicated partition, skipping cleanup checks"))
     elif disk_percent > int(audit_percent):
@@ -700,7 +701,7 @@ def count_deleted_files_procfs(service_name: str) -> int:
         pass
     except Exception as e:
         log.debug(logger.error_with_context(f"count_deleted_files for {service_name}", e))
-    
+
     return count
 
 def run_check_services(services):
@@ -710,7 +711,7 @@ def run_check_services(services):
     for service in services:
         log.info(logger.system(f"checking {service} for open file handles"))
         service_count = count_deleted_files_procfs(service)
-        log.info(logger.system(f"found {service_count} deleted open file handles", 
+        log.info(logger.system(f"found {service_count} deleted open file handles",
                               service=service))
         if service_count > 0:
             restart_service(service)
@@ -729,27 +730,27 @@ def validate_config(config: Dict[str, Any]) -> bool:
     """Enhanced configuration validation with detailed checks."""
     try:
         main_config = config['main']
-        
+
         # Validate required fields
         required_fields = ['max_fileage', 'max_filesize', 'directories_to_check', 'file_extensions']
         missing_fields = [field for field in required_fields if field not in main_config]
         if missing_fields:
             if log is not None:
-                log.error(logger.config("validation failed - missing required fields", 
+                log.error(logger.config("validation failed - missing required fields",
                                        missing_fields=missing_fields))
             return False
-        
+
         # Validate data types and ranges
         if not isinstance(main_config['max_fileage'], int) or main_config['max_fileage'] <= 0:
             if log is not None:
                 log.error(logger.config("validation failed - max_fileage must be a positive integer"))
             return False
-            
+
         if not isinstance(main_config['audit_percent'], int) or not (0 <= main_config['audit_percent'] <= 100):
             if log is not None:
                 log.error(logger.config("validation failed - audit_percent must be an integer between 0 and 100"))
             return False
-        
+
         # Validate file size format
         try:
             convert_size_to_bytes(main_config['max_filesize'])
@@ -757,18 +758,18 @@ def validate_config(config: Dict[str, Any]) -> bool:
             if log is not None:
                 log.error(logger.config("validation failed - invalid max_filesize format", error=str(e)))
             return False
-        
+
         # Validate directories exist
         missing_dirs = []
         for dir_path in main_config['directories_to_check']:
             if not os.path.exists(dir_path):
                 missing_dirs.append(dir_path)
-        
+
         if missing_dirs:
             if log is not None:
                 log.warning(logger.config("directories do not exist", missing_dirs=missing_dirs))
             # Don't fail validation, just warn
-                
+
         return True
     except Exception as e:
         if log is not None:
@@ -779,7 +780,7 @@ def validate_config(config: Dict[str, Any]) -> bool:
 def print_health_comparison(health_before: Dict, health_after: Dict, execution_time: float, space_freed: int) -> None:
     """Print a professional side-by-side comparison of system health."""
     console = Console()
-    
+
     # Create comparison table
     table = Table(title="🏥 System Health Comparison - Before vs After Cleanup", show_header=True, header_style="bold magenta")
     table.add_column("Mount Point", justify="left", style="cyan", width=12)
@@ -787,40 +788,40 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
     table.add_column("After", justify="center", style="green", width=15)
     table.add_column("Freed", justify="center", style="bold green", width=12)
     table.add_column("Improvement", justify="center", style="bold yellow", width=12)
-    
+
     # Add rows for each mount point
     for mount_point in sorted(health_before.keys()):
         if mount_point in health_after:
             before_pct = health_before[mount_point]['percent_used']
             after_pct = health_after[mount_point]['percent_used']
-            
+
             # Calculate improvement
             improvement = before_pct - after_pct
             improvement_str = f"-{improvement:.1f}%" if improvement > 0 else "0%"
-            
+
             # Calculate space freed for this specific mount point
             mount_space_freed = 0
             try:
                 used_before = health_before[mount_point]['used']
                 used_after = health_after[mount_point]['used']
-                
+
                 # Convert human readable sizes to bytes for calculation
                 before_bytes = convert_size_to_bytes(used_before)
                 after_bytes = convert_size_to_bytes(used_after)
-                
+
                 if before_bytes > after_bytes:
                     mount_space_freed = before_bytes - after_bytes
             except (KeyError, ValueError):
                 mount_space_freed = 0
-            
+
             # Get status indicators
             before_status = health_before[mount_point]['status']
             after_status = health_after[mount_point]['status']
-            
+
             # Color coding for status
             before_color = {"Good": "green", "Caution": "yellow", "Warning": "orange", "Critical": "red"}.get(before_status, "white")
             after_color = {"Good": "green", "Caution": "yellow", "Warning": "orange", "Critical": "red"}.get(after_status, "white")
-            
+
             # Show per-mount-point space freed if detected, or proportional share if not detected
             if mount_space_freed > 0:
                 freed_display = format_size(mount_space_freed)
@@ -829,7 +830,7 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
                 freed_display = f"~{format_size(space_freed // len([mp for mp in health_before.keys() if mp in health_after]))}"
             else:
                 freed_display = "0 B"
-            
+
             table.add_row(
                 mount_point,
                 f"[{before_color}]{before_pct}% ({before_status})[/{before_color}]",
@@ -837,10 +838,10 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
                 freed_display,
                 f"[bold green]{improvement_str}[/bold green]" if improvement > 0 else "[dim]0%[/dim]"
             )
-    
+
     console.print()
     console.print(table)
-    
+
     # Summary panel
     summary_text = Text()
     summary_text.append("📊 Cleanup Summary\n\n", style="bold")
@@ -852,11 +853,11 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
     summary_text.append("  •  ", style="dim")
     summary_text.append("Execution Time: ", style="bold")
     summary_text.append(f"{execution_time:.1f}s", style="yellow")
-    
+
     if global_metrics.errors_encountered > 0:
         summary_text.append("\n⚠️ Errors: ", style="bold red")
         summary_text.append(str(global_metrics.errors_encountered), style="red")
-    
+
     panel = Panel(
         Align.center(summary_text),
         title="✅ Operation Complete",
@@ -868,20 +869,20 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
 def print_compact_health_summary(health_before: Dict, health_after: Dict) -> None:
     """Print a compact system health summary."""
     console = Console()
-    
+
     summary_text = Text()
     summary_text.append("🖥️ System Status: ", style="bold")
-    
+
     critical_mounts = [mp for mp, data in health_before.items() if data['percent_used'] >= 90]
     if critical_mounts:
         summary_text.append(f"{len(critical_mounts)} critical mount(s)", style="bold red")
     else:
         summary_text.append("All systems nominal", style="bold green")
-    
+
     # Show highest usage mount
     if health_before:
         highest_usage = max(health_before.items(), key=lambda x: x[1]['percent_used'])
         mount_point, data = highest_usage
         summary_text.append(f" • Highest usage: {mount_point} ({data['percent_used']}%)", style="yellow")
-    
-    console.print(summary_text) 
+
+    console.print(summary_text)

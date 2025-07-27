@@ -42,6 +42,13 @@ pip3 -r requirements.txt
 ### Command Line Options
 
 ```bash
+# Show version information
+python diskcleanup.py --version
+python diskcleanup.py -V
+
+# Show version in GUI dialog (if GUI support available)
+python diskcleanup.py --version-dialog
+
 # Standard cleanup
 sudo python diskcleanup.py
 
