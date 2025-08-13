@@ -113,16 +113,16 @@ servers:
 
 # Optional: Define cluster groups for grouped operations
 cluster_groups:
-  att:
-    - iad51
-    - sjc51
+  client1:
+    - cluster1
+    - cluster2
   production:
-    - iad41
-    - sjc01
-  glip:
-    - aex10
-    - aex20
-    - iad41
+    - prod01
+    - prod02
+  dev:
+    - dev-cluster01
+    - dev-cluster02
+    - dev-cluster03
 ```
 
 ## Configuration Options
