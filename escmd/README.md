@@ -358,18 +358,18 @@ The health command offers two display styles:
 ./escmd.py health --quick --format json
 
 # Compare two clusters side-by-side (forces classic style)
-./escmd.py health --compare iad41
-./escmd.py -l aex20 health --compare iad41
+./escmd.py health --compare client1 
+./escmd.py -l client1  health --compare production
 
 # Compare clusters with JSON output
-./escmd.py health --compare iad41 --format json
+./escmd.py health --compare cluster1 --format json
 
 # Show health for all clusters in a group (forces classic style)
-./escmd.py health --group att
+./escmd.py health --group client1 
 ./escmd.py health --group production
 
 # Group health with JSON output
-./escmd.py health --group att --format json
+./escmd.py health --group client1 --format json
 ```
 
 **Dashboard Features:**
@@ -399,7 +399,7 @@ Define logical groups of clusters for bulk operations and organized health monit
 
 ```bash
 # Show health for all clusters in a group
-./escmd.py health --group att
+./escmd.py health --group client1 
 
 # Show health for production group with JSON output
 ./escmd.py health --group production --format json
@@ -410,7 +410,7 @@ Define logical groups of clusters for bulk operations and organized health monit
 
 **Group Configuration:**
 - **Multi-Cluster Monitoring**: Monitor 2-3+ clusters simultaneously in a grid layout
-- **Logical Organization**: Group clusters by environment (att, production, staging)
+- **Logical Organization**: Group clusters by environment (client1, production, staging)
 - **Bulk Operations**: Perform health checks across multiple related clusters
 - **Comparative Analysis**: Side-by-side health status for related environments
 
@@ -892,11 +892,11 @@ Snapshot operations require `elastic_s3snapshot_repo` to be configured for the c
 ### Cluster Groups
 ```bash
 # Monitor entire environment groups
-./escmd.py health --group att
+./escmd.py health --group client1 
 ./escmd.py health --group production
 
 # Export group health data for analysis
-./escmd.py health --group att --format json > att-cluster-health.json
+./escmd.py health --group client1 --format json > att-cluster-health.json
 
 # Quick group status overview
 ./escmd.py health --group production | grep -E "(Status|Total Nodes)"
