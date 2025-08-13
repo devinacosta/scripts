@@ -1,3 +1,418 @@
+## [2.1.0] - 2025-08-12
+### 🐛 Bug Fixes
+#### Fixed Snapshot Repository Access & Python Version Compatibility
+ - **FIXED**: Corrected Elasticsearch snapshot repository method call in `list_snapshots()`
+ - **NEW**: Added version compatibility helper `_call_with_version_compatibility()` for handling API differences
+ - **IMPROVED**: Automatic fallback between newer (`repository=`) and older (`name=`) parameter formats
+ - Resolves error: "SnapshotClient.get_repository() got an unexpected keyword argument 'name'"
+ - **COMPATIBILITY**: Works with both Python 3.12.8 and 3.13.3 with different elasticsearch-py library versions
+ - **IMPACT**: Fixes repository access for all clusters with snapshot repositories (e.g., aex20-repo)
+ - **FUTURE-PROOF**: Version compatibility helper can be extended to other Elasticsearch API methods if needed
+
+## [2.0.8] - 2025-01-11
+### 🔍 Dangling Indices Detection & Management
+#### ⚠️ New Dangling Indices Command with Deletion Support
+ - **NEW**: Added `dangling` command to detect, analyze, and delete dangling indices in the cluster
+ - **NEW**: Added UUID-based deletion capability with `--delete` flag for targeted dangling index removal
+ - **NEW**: Added hostname resolution for node IDs, showing actual hostnames instead of cryptic node IDs
+ - **PERFORMANCE**: Optimized hostname resolution to avoid multiple API calls - now gets node mapping once for all indices
+ - Implemented comprehensive dangling indices detection using Elasticsearch's `/_dangling` API
+ - Created enhanced multi-panel display system:
+   - **📊 Statistics Panel**: Shows total dangling indices, affected nodes, cluster nodes, and oldest creation date
+   - **ℹ️ Information Panel**: Explains what dangling indices are, common causes, and implications
+   - **⚠️ Detailed Table**: Lists index UUIDs, creation dates, hostnames, and node counts with color coding
+   - **🚨 Warning Panel**: Provides critical alerts about data accessibility and recovery requirements
+   - **🔧 Recovery Options**: Shows available actions (delete command, import, backup, log analysis)
+ - Added intelligent color coding: Yellow (multiple nodes), Red (single node), Dim (no nodes)
+ - Implemented success case handling with positive messaging when no dangling indices found
+ - Added pure JSON output support for automation and integration (--format json)
+ - Enhanced user experience with hostname display for better operational visibility
+
+#### 🗑️ Dangling Index Deletion Capabilities
+ - **NEW**: UUID parameter support for targeting specific dangling indices for deletion
+ - **NEW**: `--delete` flag enables destructive operations with safety confirmations
+ - **Safety Features**: 
+   - Interactive confirmation prompt requiring partial UUID match (DELETE <short-uuid>)
+   - Detailed pre-deletion information display with affected nodes count
+   - Comprehensive warning panels about data loss and irreversible operations
+   - Error validation and UUID verification before deletion attempts
+   - **NEW**: `--yes-i-really-mean-it` flag for automated deletion without confirmation prompts (use with extreme caution)
+ - **Enhanced User Experience**:
+   - Rich formatted deletion progress with status indicators
+   - Success/failure panels with clear operation results
+   - Post-deletion next steps guidance and related commands
+   - Keyboard interrupt handling for user cancellation
+   - Automated deletion support for scripting and automation scenarios
+ - **Error Handling**: Professional error panels with troubleshooting guidance and connectivity checks
+ - **Performance Enhancement**: Fixed hostname resolution performance issue that caused hanging on large clusters
+ - Usage: `./escmd.py dangling [<uuid> --delete [--yes-i-really-mean-it]] [--format json]`
+
+#### 📝 Command Integration & Help System
+ - Added dangling command to main help system in "Index Operations" section
+ - Integrated dangling command into argument parser with UUID parameter and delete flag
+ - Updated help text to reflect both listing and deletion capabilities
+ - Added command to no-preprocessing list for optimal performance
+ - Updated command handler execute() method to route dangling commands properly
+ - Enhanced esclient.py with `list_dangling_indices()` method using low-level transport
+
+#### 🎯 Enhanced JSON Output Handling
+ - **IMPROVED**: Fixed JSON format output to return pure JSON without Rich formatting
+ - Optimized JSON output flow to skip all UI elements, titles, and status messages
+ - Ensures clean pipeable output compatible with tools like `jq`, `grep`, and shell scripts
+ - JSON output now executes immediately after data retrieval for maximum efficiency
+
+## [2.0.7] - 2025-08-06
+### 🛠️ Minor Bug Fixes & Optimizations
+ - Updated version number and release date
+ - Various small improvements and optimizations
+
+## [2.0.6] - 2025-07-28
+### 🗂️ Datastreams Management
+ - Added new `datastreams` command to list all datastreams in the cluster
+ - Added ability to show detailed information for a specific datastream by passing its name
+ - Added `--delete` option to safely delete datastreams with confirmation prompts
+ - Delete operation includes safety checks: datastream verification, backing indices warning, and required confirmation text
+ - Interactive deletion requires typing 'DELETE <datastream_name>' to confirm the irreversible operation
+ - Supports both JSON and table output formats
+ - Table format displays datastream name, status, template, ILM policy, generation, and indices count
+ - Detail view shows comprehensive datastream metadata and lists all backing indices
+ - Updated help system to include datastreams command in maintenance operations section
+ - Added examples to README for datastream operations including deletion
+
+## [2.0.5] - 2025-07-27
+### 🔄 Flush Command Auto-Retry Enhancement
+#### ⚠️ Comprehensive Shard Colocation Detection
+ - The `flush` command now automatically retries failed shards with a 10-second delay, up to 10 times (11 total attempts).
+ - Retries continue until all shards are successfully flushed or the maximum number of attempts is reached.
+ - Real-time visual feedback is provided for each retry attempt, including countdowns and progress panels.
+ - Success after retries is celebrated with a dedicated panel; persistent failures after all retries are clearly reported with troubleshooting guidance.
+ - Operation summary and details panels now include retry statistics and final status.
+ - This enhancement greatly improves the reliability and robustness of flush operations, especially in clusters with transient issues.
+ - Added new `shard-colocation` command to identify availability risks in index shard distribution
+ - Implemented detection of indices with primary and replica shards on the same physical host
+ - Created comprehensive analysis engine with risk assessment (LOW/MEDIUM/HIGH/CRITICAL levels)
+ - Added detailed colocation results display with affected indices, problematic shard groups, and risk percentages
+ - Integrated visual status indicators with color-coded risk levels and severity icons
+ - Enhanced display with consolidated title panel showing comprehensive statistics (analyzed indices, affected indices, shard groups, issues)
+ - Added regex pattern filtering support for targeted analysis (./escmd.py shard-colocation <pattern>)
+ - Implemented recommendation engine with actionable guidance for resolving allocation issues
+ - Added complete JSON format support for automation and integration (--format json)
+ - Created streamlined success display when no colocation issues are found
+
+#### ⚖️ Enhanced Allocation Explain System
+ - **NEW**: Added dedicated `allocation explain` subcommand for comprehensive shard allocation analysis
+ - Implemented enhanced allocation explanation with node decision analysis and barrier identification
+ - Created rich multi-panel display system:
+   - **✅ Current Allocation Panel**: Shows allocated node, node ID, weight ranking, and allocation status
+   - **📊 Summary Panel**: Displays nodes evaluated, allocation possibilities, recommendations, and primary barriers
+   - **🖥️ Node Decisions Table**: Comprehensive table showing all nodes with decisions (✅ Yes/❌ No/⏸️ Throttle), weight rankings, primary reasons, and addresses
+   - **🚫 Barriers Analysis**: When issues exist, shows allocation barriers with impact analysis and severity levels
+   - **🚀 Quick Actions Panel**: Related commands and investigation options
+ - Enhanced allocation explanation engine with comprehensive context gathering (cluster nodes, index settings, shard information)
+ - Added smart auto-detection of primary vs replica shards with manual override option (--primary flag)
+ - Implemented shard number specification support (--shard/-s flag, default: 0)
+ - Added detailed error handling with professional error panels for missing indices/shards
+ - Complete JSON export support for automation and detailed analysis
+ - Usage: `./escmd.py allocation explain <index> [--shard N] [--primary] [--format json]`
+
+#### 🏥 Health Dashboard Integration for Allocation Issues
+ - **NEW**: Added automatic allocation issue detection in health dashboard
+ - Created allocation issues panel that appears when unassigned shards are detected
+ - Implemented severity assessment system (Minor/Moderate/Critical) based on number of unassigned shards
+ - Added real-time statistics: unassigned shard count, impact percentage, active shards percentage
+ - Integrated example problematic index display with quick action recommendations
+ - Enhanced health dashboard layout to conditionally show allocation issues panel next to snapshots
+ - Smart display logic: panel only appears when issues exist, maintaining clean interface when healthy
+ - Color-coded severity indicators: ⚠️ Yellow (Minor), 🟠 Orange (Moderate), 🔴 Red (Critical)
+
+#### 🎨 Enhanced User Interface & Configuration
+ - **NEW**: Added configurable Legend/Quick Actions panels for indices command
+ - Implemented `show_legend_panels` setting in elastic_servers.yml (default: false for cleaner display)
+ - Enhanced ConfigurationManager with `get_show_legend_panels()` method for legend panel control
+ - Created conditional legend and quick actions display based on configuration settings
+ - Updated indices command to respect legend panel configuration with fallback error handling
+
+#### 🐛 Bug Fixes & UI Improvements
+ - **FIXED**: Resolved duplicate output issue in `indices` command that was displaying content twice
+ - **FIXED**: Enhanced "NEEDS ATTENTION" text wrapping in Performance panel by increasing column and panel widths
+ - **FIXED**: Improved snapshots panel layout by removing empty row when repository is not configured
+ - **ENHANCED**: Removed "-master" suffix from master node display name in health screen for cleaner appearance
+ - **IMPROVED**: Streamlined shard colocation display by moving analysis summary into main title panel
+ - **ENHANCED**: Better error handling and user feedback across all new allocation features
+
+#### 📖 Command Reference
+```bash
+# Shard Colocation Analysis
+./escmd.py shard-colocation                    # Analyze all indices
+./escmd.py shard-colocation "logs-*"           # Filter by pattern
+./escmd.py shard-colocation --format json      # JSON output
+
+# Enhanced Allocation Explain
+./escmd.py allocation explain my-index          # Explain shard 0 allocation
+./escmd.py allocation explain my-index --shard 2 # Explain specific shard
+./escmd.py allocation explain my-index --primary # Force primary analysis
+./escmd.py allocation explain my-index --format json # JSON output
+
+# Configuration
+# Add to elastic_servers.yml settings section:
+show_legend_panels: true   # Enable legend panels (default: false)
+```
+
+## [2.0.3] - 2025-07-23
+### ✨ Enhanced Snapshots, Allocation, Settings, ILM Support & Command Improvements
+#### 📦 Comprehensive Snapshots Visual Upgrade
+ - Enhanced `snapshots list` command with complete Rich formatting and multi-panel layout
+ - Added statistics overview panel with total snapshots, success/failure counts, and indices summary
+ - Implemented enhanced table with emoji column headers (📸 🎯 📅 ⏱️ 📊 ❌) and state icons
+ - Added color-coded state indicators (✅ Success, ⏳ Progress, ❌ Failed, ⚠️ Partial) with row styling
+ - Created legend panel explaining snapshot states and quick actions panel with usage examples
+ - Integrated side-by-side bottom panels following the 2.0+ visual design pattern
+ - Enhanced statistics calculation with comprehensive snapshot analysis and filtering info
+ - Improved professional appearance with proper spacing, padding, and panel alignment
+
+#### ⚖️ Comprehensive Allocation Management Upgrade
+ - Enhanced `allocation` command with complete Rich formatting and four-panel layout system
+ - Added comprehensive statistics overview with status, node counts, and exclusion tracking
+ - Implemented allocation status panel (📊) with enable/disable state and shard movement info
+ - Created configuration details panel (⚙️) showing current settings and custom configurations
+ - Added excluded nodes panel (❌) with numbered list or success message if none excluded
+ - Integrated quick actions panel (🚀) with all available allocation commands and examples
+ - Enhanced success/error messages with color-coded Rich message boxes and detailed feedback
+ - Added comprehensive JSON format support (`--format json`) for all allocation subcommands
+ - Improved visual indicators: ✅ Enabled, ⚠️ Disabled, 🔄 Movement, 🔒 Restricted, ❌ Excluded
+ - Professional two-column layout with proper spacing and consistent panel styling
+
+#### ⚙️ Comprehensive Cluster Settings Upgrade
+ - Enhanced `settings` command with complete Rich formatting and five-panel layout system
+ - Added comprehensive cluster overview panel (📊) with status, nodes, and custom settings count
+ - Implemented allocation settings panel (⚖️) showing allocation status and excluded nodes summary
+ - Created security & configuration panel (🔐) with SSL, authentication, and certificate verification status
+ - Added settings breakdown panel (📈) with transient/persistent counts and category analysis
+ - Integrated quick actions panel (🚀) with related commands and navigation options
+ - Enhanced detailed settings table (📋) with formatted values, setting types, and organized display
+ - Maintains original detailed cluster settings table with improved Rich formatting and value formatting
+ - Added smart value display for booleans (✅/❌), large numbers (comma formatting), and long strings
+ - Professional multi-column layout combining both overview panels and detailed settings table
+ - Enhanced settings analysis with recursive counting of nested configuration values
+ - Improved visual organization of complex cluster settings into logical, digestible categories
+ - Maintains full JSON format support (`--format json`) for programmatic access
+
+#### 📋 Comprehensive Index Lifecycle Management (ILM) Support
+ - Added ILM overview panel to `settings` command showing status, policies, and phase distribution
+ - Created dedicated `ilm` command with four subcommands for comprehensive ILM management
+ - Implemented `ilm status` with multi-panel display (📊 Status, 🔄 Phase Distribution, 🚀 Actions)
+ - Added `ilm policies` command showing policy matrix with phase coverage (🔥🟡🧊❄️🗑️)
+ - Created `ilm policy <name>` command for detailed single policy configuration and usage analysis
+ - Created `ilm explain <index>` for detailed index lifecycle analysis and error detection
+ - Implemented `ilm errors` showing indices with ILM errors in organized table format
+ - Enhanced ILM data collection with phase counting, error detection, and policy analysis
+ - Added comprehensive error handling for clusters without ILM enabled or access issues
+ - Integrated visual phase icons (🔥 Hot, 🟡 Warm, 🧊 Cold, ❄️ Frozen, 🗑️ Delete, ⚪ Unmanaged)
+ - Professional multi-panel layouts with consistent styling across all ILM commands
+ - Complete JSON format support for all ILM subcommands for automation and integration
+
+#### 🛠️ Enhanced Core Commands with Rich Formatting
+ - Enhanced `ping` command with comprehensive connection testing and cluster overview panels
+ - Added connection details panel (🔗) showing host, port, SSL, authentication, and certificate info
+ - Integrated cluster overview panel (📊) with health status, node counts, and quick actions
+ - Implemented JSON format support for `ping` command with structured connection data
+ - Added detailed error handling with Rich panels for connection failures and exceptions
+
+ - Enhanced `flush` command with multi-panel synced flush operation monitoring
+ - Added operation summary panel (📊) with shard statistics, success rates, and failure tracking
+ - Implemented detailed failure reporting with index/shard-specific error messages
+ - Added progress status indicator during flush operation with visual feedback
+ - Integrated quick actions panel (🚀) with related monitoring commands
+
+ - Enhanced `freeze` command with comprehensive index validation and operation tracking
+ - Added index validation panel (✅) showing health, status, documents, and size information
+ - Implemented freeze operation details panel (⚙️) explaining read-only mode and effects
+ - Added available indices display when target index not found with helpful error messages
+ - Integrated success confirmation with detailed operation results and next steps
+
+ - Updated help system with enhanced descriptions for all improved commands
+ - Added JSON format support documentation and command categorization improvements
+ - Professional multi-panel layouts following the 2.0+ visual design pattern consistently
+
+#### 🐛 Bug Fixes and Improvements
+ - Fixed `current-master` command JSON format support by changing positional argument to `--format` flag
+ - Enhanced `current-master` JSON output with comprehensive master node details and cluster overview
+ - Added structured JSON response including node details (hostname, transport_address, IP, version, JVM, OS info)
+ - Improved JSON field accuracy by removing misleading per-node statistics for dedicated master nodes
+ - Added clarity fields (`is_dedicated_master`, `is_data_node`) and conditional per-node stats only for data nodes
+ - Fixed `ping` command cluster status display (was showing "Unknown", now shows correct Green/Yellow/Red)
+ - Improved argument consistency across all commands using `--format` instead of positional arguments
+
+## [2.0.2] - 2025-07-23
+### ✨ Enhanced Paging System
+#### 🔄 Configurable Paging for Large Datasets
+ - Added comprehensive paging support for `indices`, `shards`, and `snapshots` commands
+ - Implemented configuration-based auto-paging with `enable_paging` and `paging_threshold` settings
+ - Added `--pager` flag to all supported commands for manual paging override
+ - Enhanced user experience for viewing large datasets with less-like navigation
+ - Configurable thresholds allow customization of when paging automatically activates
+ - Maintains full Rich formatting (colors, borders, emojis) within the pager experience
+
+#### ⚙️ Configuration Management
+ - Added `enable_paging: true/false` setting to elastic_servers.yml for global paging control
+ - Added `paging_threshold: 50` setting to control when auto-paging activates
+ - Enhanced ConfigurationManager with `get_paging_enabled()` and `get_paging_threshold()` methods
+ - Backward compatible - paging enabled by default with sensible threshold values
+
+## [2.0.1] - 2025-07-23
+### ✨ Enhanced Command Display & Alignment
+#### 📊 Improved Index & Shard Commands
+ - Enhanced `indice` command with comprehensive Rich formatting and detailed information panels
+ - Added three-panel layout: Overview, Settings, and Shards Distribution with perfect column alignment
+ - Integrated ILM (Index Lifecycle Management) policy and phase information display
+ - Implemented detailed shard-level information with color-coded state indicators
+ - Added hot/frozen index detection with theme-based coloring (red for hot, blue for frozen)
+ - Enhanced `shards` command with full-width styling and improved statistics panel
+ - Implemented proper icon and text alignment across all tabular displays
+ - Added comprehensive index metadata including UUID, creation date, version, and configuration
+
+#### 👑 Enhanced Current Master & Recovery Commands
+ - Enhanced `current-master` command with comprehensive Rich formatting and dual-panel layout
+ - Added detailed master node information including hostname, node ID, and role breakdown
+ - Integrated cluster status panel with real-time health indicators and node counts
+ - Enhanced `recovery` command with advanced recovery monitoring and progress tracking
+ - Added recovery summary dashboard with completion rates and stage breakdowns
+ - Implemented color-coded recovery progress with visual stage indicators
+ - Added recovery type analysis and comprehensive operation tracking
+
+#### 🎨 Visual Consistency & Alignment
+ - Fixed emoji and text alignment issues across all Rich table displays
+ - Implemented three-column layout (Label | Icon | Value) for perfect alignment
+ - Enhanced spacing and formatting for professional appearance
+ - Added consistent icon usage and spacing throughout the application
+ - Improved full-width panel layouts for better terminal utilization
+
+## [2.0.0] - 2025-07-22
+### 🎉 MAJOR RELEASE - Complete UI & UX Overhaul
+#### ✨ Enhanced Health Dashboard System
+ - Added comprehensive 6-panel health dashboard with visual status indicators
+ - Implemented dashboard/classic style configuration (health_style: dashboard|classic)
+ - Added configurable classic format options (classic_style: table|panel)
+ - Enhanced cluster overview panel with current master node display
+ - Added complete node topology breakdown (total, data, master, client nodes)
+ - Implemented shard balance metrics with shards-per-data-node calculations
+ - Added real-time performance monitoring (pending tasks, in-flight operations, recovery jobs)
+ - Integrated snapshot management panel with repository health and backup status
+ - Added visual progress bars and status indicators throughout (✅ 📊 ⚠️ ❌)
+ - Improved panel alignment and spacing for professional appearance
+
+#### 🔄 Multi-Cluster Comparison & Grouping
+ - Added side-by-side cluster health comparison (--compare feature)
+ - Implemented cluster groups for bulk monitoring (--group feature)
+ - Added cluster_groups configuration section in elastic_servers.yml
+ - Support for 2-3+ cluster simultaneous monitoring in grid layout
+ - Enhanced error handling for failed cluster connections in group operations
+
+#### 🎨 Enhanced Visual System
+ - Implemented fancy categorized help system with Rich panels
+ - Added color-coded command categories (Cluster, Node, Index, Maintenance)
+ - Created visual command organization with icons and descriptions
+ - Added practical usage examples in help display
+ - Enhanced version command with professional panel layout and dynamic Python version
+ - Improved all output formatting for consistency and visual appeal
+
+#### ⚙️ Configuration Enhancements
+ - Added global and per-cluster health_style configuration
+ - Implemented classic_style configuration (table vs panel format)
+ - Added verify_certs support for SSL certificate validation
+ - Enhanced configuration validation and error handling
+ - Added command-line overrides for all display style options
+
+#### 🔧 Health Command Improvements
+ - Commands:
+   ./escmd.py health                           # Use configured style
+   ./escmd.py health --style dashboard         # Force dashboard style
+   ./escmd.py health --style classic           # Force classic style
+   ./escmd.py health --classic-style table     # Force original table format
+   ./escmd.py health --classic-style panel     # Force enhanced panel format
+   ./escmd.py health --compare iad41           # Side-by-side comparison
+   ./escmd.py health --group att               # Group health monitoring
+   ./escmd.py health --group production --format json  # Group with JSON output
+
+#### 📖 Documentation & Help
+ - Complete README.md overhaul with comprehensive feature documentation
+ - Added enhanced help system with visual command categorization
+ - Added configuration examples and best practices
+ - Added troubleshooting section and usage workflows
+ - Documented all new features with examples
+
+#### 🛠️ Technical Improvements
+ - Refactored code for better modularity and maintainability
+ - Enhanced error handling and connection reliability
+ - Improved Rich library integration for consistent styling
+ - Added comprehensive configuration validation
+ - Enhanced JSON export capabilities for all new features
+
+### 📊 Key Features Summary
+ - **6-Panel Health Dashboard**: Complete cluster overview in organized visual layout
+ - **Multi-Cluster Operations**: Compare and monitor multiple clusters simultaneously
+ - **Flexible Display Options**: Configurable styles with command-line overrides
+ - **Enhanced Help System**: Visual command discovery with categorization
+ - **Professional UI**: Consistent styling throughout all commands
+ - **Cluster Groups**: Logical organization for bulk operations
+
+## [1.8.0] - 2025-07-22
+ - Added support to list Elasticsearch snapshots via:
+   # Commands are as follow:
+   ./escmd.py -l aex20 snapshots list
+   ./escmd.py -l aex20 snapshots list logs-gas
+   ./escmd.py -l aex20 snapshots list --format json
+   ./escmd.py -l aex20 snapshots list logs-gas --format json
+ - Added Allocation settings changes:
+  # Commands are as follows:
+  ./escmd.py allocation display     # Show current allocation settings
+  ./escmd.py allocation enable      # Enable shard allocation
+  ./escmd.py allocation disable     # Disable shard allocation
+  ./escmd.py allocation exclude add {hostname}     # Add host to exclusion list
+  ./escmd.py allocation exclude remove {hostname}  # Remove host from exclusion list
+  ./escmd.py allocation exclude reset              # Clear all exclusions
+## [1.6.0] - 2025-05-30
+ - Added allocation exclude feature to exclude server from allocations (./escmd.py allocation exclude {hostname})
+ - Fixed issue with cursor issue when deleting indice from cluster.
+## [1.5.0] - 2025-04-14
+ - Refactored main script for readability (command_handler.py, configuration_manager.py, utils.py) updated accordingly
+ - Added snowflake next to indices, to automatically show frozen indices.
+ - Added exclude option, allows excluding indice from node. (./escmd.py exclude .ds-aex20-c01-logs-qdf-k8s-default-2025.04.01-000238 -s ess01)
+ - Added exclude-reset option, removes any exclusions from index. (./escmd.py exclude-reset .ds-aex20-c01-logs-qdf-k8s-default-2025.04.01-000238)
+## [1.4.2] - 2025-03-17
+ - Changed default rollover behavior to Datastream (./escmd.py rollover aex10-c01-logs-gan-k8s-access )
+ - Changed old rollover to auto-rollover (./escmd.py auto-rollover -l aex10)
+ - Now shows hot shards for datastreams
+## [1.4.0] - 2025-01-13
+ - Migrated to use PyClasses
+ - Added shards sorting by size (--size, -s)
+ - Added shards limit output based upon node (--location, -l)
+ - Added ability to limit number of rows returned in data (-n)
+ - Added ability to rollover indices (./escmd rollover -l aex10)
+## [1.2.4] - 2024-09-23
+ - Added default timeout of 60 seconds.
+## [1.2.2] - 2024-08-28
+ - Added password prompt if password == None
+ - Added progress bar on recovery screen
+## [1.2.1] - 2024-08-27
+ - Fixed Flushed to ignore SSL cert validation
+## [1.2.0] - 2024-08-22
+ - Fixed Indice Search issue that was broken
+ - Added Guage next to ES health.
+## [1.1.9] - 2024-08-15
+ - Added ability to filter indices by status (example: ./escmd.py -l dca07 indices --status yellow)
+ - Added ability to delete matching indices (example: ./escmd.py -l dca07 indices 2024.15 --delete)
+ - Added ability to check indice (replication status) --- TODO
+## [1.0.12] - 2024-07-16
+ - Fixed version to not require ES connection.
+## [1.0.11] - 2024-07-15
+ - Added hostname2, to provide 2nd failover node for queries.
+ - Added locations, to show configured servers.
+ - Added Index Column auto width based upon index length.
+## [1.0.10] - 2024-05-16
+ - Fixed Recovery Status
+## [1.0.9] - 2024-05-14
+ - Fixed Recovery Status to show percent and source/dest node.
 ## [1.0.8] - 2024-04-22
  - Added Flush feature, to POST _flush/synced
 ## [1.0.7] - 2024-04-21

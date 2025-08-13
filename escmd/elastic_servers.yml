@@ -1,12 +1,246 @@
 settings:
-  # Options for Box_Style: SIMPLE, ASCII, SQUARE, ROUNDED, SQUARE_DOUBLE_HEAD
-  box_style:  SQUARE_DOUBLE_HEAD
+  # Options for box_style: SIMPLE, ASCII, SQUARE, ROUNDED, SQUARE_DOUBLE_HEAD
+  box_style: SQUARE_DOUBLE_HEAD
+  # Options for health_style: dashboard, classic
+  # This sets the default health display style for all clusters
+  health_style: dashboard
+  # Options for classic_style: table, panel
+  # When health_style is 'classic', this controls the format
+  classic_style: panel
+  # Paging configuration for large datasets
+  # enable_paging: true/false - Enable automatic paging for large outputs
+  enable_paging: true
+  # paging_threshold: number - Auto-enable pager when output exceeds this many items
+  paging_threshold: 50
+
+# Cluster groups for monitoring multiple related clusters
+cluster_groups:
+  att: 
+    - iad51
+    - sjc51
+  us-prod:
+    - iad41
+    - sjc01
+  glip:
+    - aex10
+    - aex20
 
 servers:
-  - name: default
-    hostname: 192.168.68.87
+  - name: DEFAULT
+    hostname: 127.0.0.1
+    port: 9200
+    use_ssl: False
+    verify_certs: False
+  - name: iad41
+    hostname: iad41-c01-ess01.c01.ringcentral.com
+    hostname2: iad41-c01-ess02.c01.ringcentral.com
+    port: 9201
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+    health_style: dashboard  # Override global setting for this cluster
+    classic_style: table     # Use original table format when classic style is used
+  - name: iad41-c02
+    hostname: iad41-c01-ess01.c01.ringcentral.com
+    hostname2: iad41-c01-ess02.c01.ringcentral.com
+    port: 9202
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: iad41-c03
+    hostname: iad41-c01-ess01.c01.ringcentral.com
+    hostname2: iad41-c01-ess02.c01.ringcentral.com
+    port: 9203
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: sjc01
+    hostname: sjc01-c01-ess10.c01.ringcentral.com
+    hostname2: sjc01-c01-ess11.c01.ringcentral.com
+    port: 9201
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+    health_style: classic  # Use classic table style for this cluster
+  - name: sjc01-c02
+    hostname: sjc01-c01-ess10.c01.ringcentral.com
+    hostname2: sjc01-c01-ess11.c01.ringcentral.com
+    port: 9202
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: sjc01-c03
+    hostname: sjc01-c01-ess10.c01.ringcentral.com
+    hostname2: sjc01-c01-ess11.c01.ringcentral.com
+    port: 9203
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: iad01
+    hostname: iad01-c01-ess12.c01.ringcentral.com
+    hostname2: iad01-c01-ess13.c01.ringcentral.com
+    port: 9201
+    use_ssl: False
+    verify_certs: False
+    elasitc_authenticaton: False
+    elastic_username: None
+    elastic_password: None
+  - name: iad51 # AT&T
+    hostname: iad51-c01-ess01.prof.ringcentral.biz
+    hostname2: iad51-c01-ess02.prof.ringcentral.biz
+    port: 9201
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: sjc51 # AT&T
+    hostname: sjc51-c01-ess01.prof.ringcentral.biz
+    hostname2: iad51-c01-ess02.prof.ringcentral.biz
+    port: 9201
+    use_ssl: True
+    verify_certs: False
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None 
+  - name: sin02
+    hostname: sin02-c01-ess01.c01.ringcentral.com
+    hostname2: sin02-c01-ess02.c01.ringcentral.com
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: nrt02
+    hostname: nrt02-c01-ess01.c01.ringcentral.com
+    hostname2: nrt02-c01-ess02.c01.ringcentral.com
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: ams01
+    hostname: ams01-c01-ess01.c01.ringcentral.com
+    hostname2: ams01-c01-ess02.c01.ringcentral.com
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: fra01
+    hostname: fra01-c01-ess01.c01.ringcentral.com
+    hostname2: fra01-c01-ess02.c01.ringcentral.com
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: dca07
+    hostname: dca07-c01-ess01.c01.ringcentral.com
+    hostname2: dca07-c01-ess02.c01.ringcentral.com
+    port: 9200
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: aex10
+    hostname: aex10-c01-ess40.elk.int.ringcentral.com
+    hostname2: aex10-c01-ess41.elk.int.ringcentral.com
+    port: 9200
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+    elastic_s3snapshot_repo: "aex10-repo"
+  - name: aex20
+    hostname: aex20-c01-ess10.elk.ops.ringcentral.com
+    hostname2: aex20-c01-ess11.elk.ops.ringcentral.com
+    port: 9200
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+    elastic_s3snapshot_repo: "aex20-repo"
+  - name: str07
+    hostname: str07-c01-ess01.c01.ringcentral.com
+    hostname2: str07-c01-ess02.c01.ringcentral.com
+    port: 9200
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: sjc06
+    hostname: sjc06-c02-ess05.ops.ringcentral.com 
+    hostname2: sjc06-c02-ess06.ops.ringcentral.com
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: sjc06-c02
+    hostname: sjc06-c02-ess05.ops.ringcentral.com 
+    hostname2: sjc06-c02-ess06.ops.ringcentral.com
+    port: 9202
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: blr01
+    hostname: blr01-c03-ess01.pro.ringcentral.in
+    hostname2: blr01-c01-ess02.pro.ringcentral.in
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: str04 
+    hostname: str04-c01-ess06.elk.int.ringcentral.com
+    hostname2: str04-c01-ess07.elk.int.ringcentral.com
+    port: 9200
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: aex09
+    hostname: aex09-c01-ess10.elk.prof.ringcentral.biz
+    hostname2: aex09-c01-ess11.elk.prof.ringcentral.biz
     port: 9200
     use_ssl: False 
     elastic_authentication: False 
-    elastic_username: None 
+  - name: iad41-c03-dt
+    hostname: iad41-c03-ess04.c01.ringcentral.com
+    hostname: iad41-c01-ess05.c01.ringcentral.com
+    port: 9203
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+  - name: syd12
+    hostname: syd12-c01-ess01.elk.int.ringcentral.com
+    hostname2: syd12-c01-ess02.elk.int.ringcentral.com
+    port: 9201
+    use_ssl: True
+    elastic_authentication: True
+    elastic_username: None
+    elastic_password: None
+    elastic_s3snapshot_repo: syd12-repo
+  - name: aex18 
+    hostname: 10.45.128.100
+    hostname2: 10.45.129.119
+    port: 9200
+    use_ssl: False 
+    elastic_authentication: True
+    elastic_username: None
     elastic_password: None

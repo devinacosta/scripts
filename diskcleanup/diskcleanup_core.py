@@ -185,16 +185,16 @@ def delete_old_abrt_directories(abrt_directory: str, max_age_days: int, dry_run:
                     if dry_run:
                         freed = simulate_cleanup(dir_path)
                         space_freed += freed
-                        global_metrics.add_directory(freed)
-                        log.info(logger.dry_run(f"remove directory {dir_path}",
-                                               size=format_size(freed), operation="age_cleanup"))
+                        log.info(logger.dry_run(f"ABRT directory cleanup",
+                                               target=dir_path,
+                                               potential_savings=format_size(freed)))
                     else:
                         freed = simulate_cleanup(dir_path)
                         space_freed += freed
                         shutil.rmtree(dir_path)
-                        global_metrics.add_directory()
-                        log.info(logger.action(f"removed directory {dir_path}",
-                                              size=format_size(freed), operation="age_cleanup"))
+                        log.info(logger.action("ABRT directory removed",
+                                              target=dir_path,
+                                              freed=format_size(freed)))
     except Exception as e:
         log.error(logger.error_with_context(abrt_directory, e))
         global_metrics.add_error()
@@ -662,17 +662,17 @@ def audit_scan_files(audit_path, disk_percent):
     log.info(logger.system("disk cleanup completed"))
 
 def check_auditd(audit_percent=50):
-    """
-    Checks and cleans up audit logs if disk usage exceeds a threshold.
-    """
+    """Check and clean up audit logs if disk usage exceeds threshold."""
     audit_path = '/var/log/audit'
     disk_total, disk_used, disk_percent = partition_usage(audit_path)
-
-    log.info(logger.system(f"starting audit cleanup for {audit_path}",
-                          current_usage=f"{disk_percent}%", threshold=f"{audit_percent}%"))
-
-    if same_partition(audit_path,'/var/log'):
-        log.warning(logger.system("/var/log/audit not on dedicated partition, skipping cleanup checks"))
+    
+    log.info(logger.system("AuditD cleanup starting",
+                          path=audit_path,
+                          current_usage=f"{disk_percent}%",
+                          threshold=f"{audit_percent}%"))
+    
+    if same_partition(audit_path, '/var/log'):
+        log.warning(logger.system("AuditD not on dedicated partition, skipping cleanup"))
     elif disk_percent > int(audit_percent):
         audit_scan_files(audit_path, disk_percent)
 
@@ -822,12 +822,15 @@ def print_health_comparison(health_before: Dict, health_after: Dict, execution_t
             before_color = {"Good": "green", "Caution": "yellow", "Warning": "orange", "Critical": "red"}.get(before_status, "white")
             after_color = {"Good": "green", "Caution": "yellow", "Warning": "orange", "Critical": "red"}.get(after_status, "white")
 
-            # Show per-mount-point space freed if detected, or proportional share if not detected
+            # Show space freed logic - assign total to root filesystem if no per-mount detection
             if mount_space_freed > 0:
                 freed_display = format_size(mount_space_freed)
+            elif improvement > 0 and mount_point == '/':
+                # Show total space freed on root filesystem since that's where most cleanup occurs
+                freed_display = f"{format_size(space_freed)}"
             elif improvement > 0:
-                # If we can't detect actual space freed but percentage improved, show proportional
-                freed_display = f"~{format_size(space_freed // len([mp for mp in health_before.keys() if mp in health_after]))}"
+                # Other mount points with improvement but no detected space
+                freed_display = "< 1 MB"
             else:
                 freed_display = "0 B"
 
