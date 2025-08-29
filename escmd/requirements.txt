@@ -1,4 +1,4 @@
-elasticsearch==7.15.1
+elasticsearch==7.17.12
 PyYAML==6.0.1
 Requests==2.31.0
 rich==13.7.1

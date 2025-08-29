@@ -1,3 +1,253 @@
+## [2.5.0] - 2025-08-29
+### 🏥 Major Enhancement: Advanced Group Health Monitoring & Performance Optimization
+
+#### 🚀 Group Health Dashboard Enhancements
+ - **NEW**: Enhanced group health display (`./escmd.py health --group <name>`) with comprehensive cluster metrics
+ - **NEW**: Added ES Version, Primary Shards, Total Shards, Unassigned Shards, and Health Percentage columns
+ - **NEW**: JSON format support for group health (`./escmd.py health --group <name> --format json`)
+ - **FIXED**: Group health connection issues - corrected ElasticsearchClient parameter passing bug
+ - **ENHANCED**: Group health now shows same detailed information as individual `health -q` command
+ - **PROFESSIONAL**: Color-coded status indicators (🟢 GREEN, 🟡 YELLOW, 🔴 RED) for quick visual assessment
+
+#### 📊 JSON API Support
+ - **NEW**: Machine-readable JSON output for automation and monitoring integration
+ - **NEW**: Structured cluster health data with comprehensive error handling
+ - **NEW**: Error field tracking for troubleshooting cluster connectivity issues
+ - **COMPATIBLE**: Maintains backward compatibility with existing table format
+
+#### 📈 Enhanced Version Command with Dynamic Statistics
+ - **NEW**: Dynamic command statistics table showing categorized command counts
+ - **NEW**: Real-time subcommand counting for complex commands (ILM, allocation, etc.)
+ - **NEW**: Features & Capabilities panel with system information
+ - **ENHANCED**: Version display now shows Python version, platform, and script location
+ - **SMART**: Automatically discovers available commands from argument parser
+ - **COMPREHENSIVE**: Shows 57 total commands across 8 categories with proper subcounting
+
+#### 🎨 Beautiful Welcome Screen (No Arguments) - DYNAMIC
+ - **NEW**: Stunning welcome screen when running `./escmd.py` without arguments
+ - **DYNAMIC**: Real-time command discovery - automatically detects all available commands
+ - **SELF-UPDATING**: Command counts and categories update automatically when new commands are added
+ - **ORGANIZED**: Quick start commands table with most common operations
+ - **CATEGORIZED**: Dynamic command categories overview with live counts and examples
+ - **RESPONSIVE**: Adaptive layout for different terminal widths (side-by-side vs stacked)
+ - **HELPFUL**: Pro tips section with usage hints and best practices
+ - **PROFESSIONAL**: Rich terminal UI with emojis, colors, and proper alignment
+ - **GUIDANCE**: Clear navigation to help system and version statistics
+ - **INTELLIGENT**: Falls back to static data if dynamic discovery fails
+
+#### ⚡ Performance Optimizations
+ - **OPTIMIZED**: Health dashboard loading time reduced from minutes to ~8 seconds
+ - **NEW**: Fast snapshot statistics gathering with `get_snapshot_stats_fast()` method
+ - **NEW**: Optimized node information retrieval with `get_nodes_fast()` method
+ - **ENHANCED**: 5-step progress tracking for dashboard loading with time estimates
+
+#### 🔧 Snapshot Repository Detection
+ - **FIXED**: Snapshot information display for AEX20 and other clusters
+ - **ENHANCED**: Support for both `repository` and `elastic_s3snapshot_repo` configuration keys
+ - **IMPROVED**: Automatic repository detection and fallback logic
+
+#### 🛠️ Configuration & Authentication
+ - **ENHANCED**: Password resolution system with environment-based authentication
+ - **IMPROVED**: Multi-cluster configuration support with proper state file handling
+ - **DEBUGGED**: Configuration manager initialization for group operations
+
+### 📈 Impact Summary
+ - **Dashboard Performance**: 90%+ improvement in loading times
+ - **Group Monitoring**: Complete multi-cluster health visibility
+ - **API Integration**: JSON support enables programmatic access
+ - **Data Completeness**: All health metrics now available in group view
+ - **Error Handling**: Comprehensive error tracking and reporting
+
+## [2.4.0] - 2025-08-27
+### 🏥 Major Feature: Comprehensive Cluster Health Monitoring
+#### 🔍 Advanced Cluster Health Checks
+ - **NEW**: Added `cluster-check` command for comprehensive cluster health monitoring
+ - **NEW**: ILM (Index Lifecycle Management) error detection and reporting
+ - **NEW**: Detection of indices without ILM policies attached (unmanaged indices)
+ - **NEW**: Large shard size monitoring with configurable thresholds (default: >50GB)
+ - **ENHANCED**: Multi-category health assessment with detailed reporting
+ - **COMPREHENSIVE**: Coverage analysis showing managed vs unmanaged indices
+ - **INTELLIGENT**: Automatic ILM API compatibility detection with graceful fallbacks
+
+#### 📊 Rich Formatted Health Reports
+ - **NEW**: Professional multi-panel dashboard with color-coded status indicators
+ - **NEW**: ILM Coverage Overview showing total indices, managed count, error count, and unmanaged count
+ - **NEW**: Detailed tables for ILM errors with policy names, phases, actions, and error reasons
+ - **NEW**: Dedicated table for indices without ILM policies for governance visibility
+ - **NEW**: Large shard size reporting with shard-level details (index, shard number, type, size)
+ - **ENHANCED**: Smart recommendations based on detected issues
+ - **PROFESSIONAL**: Consistent Rich library styling with bordered panels and full-width tables
+
+#### ⚙️ Flexible Configuration & Output
+ - **NEW**: Added `--format` parameter supporting both table (default) and JSON output modes
+ - **NEW**: Added `--max-shard-size` parameter for configurable shard size thresholds
+ - **NEW**: Added `--show-details` flag for extended information display
+ - **NEW**: Added `--skip-ilm` flag for clusters without ILM support or older Elasticsearch versions
+ - **ROBUST**: JSON output with proper control character sanitization for automation compatibility
+ - **RELIABLE**: Comprehensive error handling for API compatibility issues
+
+#### 🔧 Technical Implementation
+ - **ADDED**: `check_ilm_errors()` method for detecting ILM step errors via `/_all/_ilm/explain` API
+ - **ADDED**: `check_no_replica_indices()` method for replica configuration validation
+ - **ADDED**: `check_large_shards()` method for shard size monitoring via `/_cat/shards` API
+ - **ADDED**: `display_cluster_health_report()` method for comprehensive formatted output
+ - **ADDED**: JSON sanitization for problematic Elasticsearch stack traces and control characters
+ - **ENHANCED**: Progress tracking with real-time status updates during health checks
+ - **MAINTAINED**: Full backward compatibility with existing escmd command structure
+
+#### 🎯 Use Cases & Benefits
+ - **OPERATIONS**: Daily cluster health monitoring and issue identification
+ - **GOVERNANCE**: ILM policy coverage analysis and compliance reporting  
+ - **CAPACITY**: Proactive shard size monitoring for performance optimization
+ - **AUTOMATION**: JSON output support for integration with monitoring systems
+ - **TROUBLESHOOTING**: Detailed error reporting with retry counts and failure reasons
+
+### 🔧 Major Feature: Dual-Mode Replica Management System
+#### 🚀 Integrated Health Check + Replica Fixing
+ - **NEW**: Added `--fix-replicas` parameter to `cluster-check` command for seamless health-to-fix workflow
+ - **NEW**: Automatic targeting of indices with 0 replicas discovered during health assessment
+ - **NEW**: Professional workflow integration with clear visual progression from assessment to fixing
+ - **NEW**: Added `--dry-run` and `--force` parameters for replica fixing operations
+ - **COMPREHENSIVE**: Maintains complete cluster health context while adding replica fixing capability
+ - **INTELLIGENT**: Uses existing `check_no_replica_indices()` results for targeted operations
+ - **SEAMLESS**: Health assessment → Issue identification → Automated fixing in single command
+
+#### ⚙️ Standalone Replica Management
+ - **NEW**: Added dedicated `set-replicas` command for advanced replica operations
+ - **NEW**: Multiple targeting modes: `--indices`, `--pattern`, `--no-replicas-only` filters
+ - **NEW**: Flexible replica count setting with `--count` parameter (supports any replica count)
+ - **NEW**: Pattern-based operations for bulk replica management (e.g., `--pattern "logs-*"`)
+ - **NEW**: Advanced filtering capabilities for precise index selection
+ - **GRANULAR**: Complete control over replica count changes for specific use cases
+ - **AUTOMATION**: Dedicated interface optimized for scripts and maintenance workflows
+
+#### 🛡️ Safety & Validation Features
+ - **COMPREHENSIVE**: Pre-flight validation checks index existence and current settings
+ - **SAFE**: Complete dry-run mode for both integrated and standalone operations
+ - **INTERACTIVE**: Confirmation prompts with detailed impact information (bypassable with `--force`)
+ - **ROBUST**: Graceful error handling for API failures, network issues, and invalid operations
+ - **PLANNED**: Comprehensive planning engine shows current → target replica counts before execution
+ - **VALIDATED**: Index existence verification and settings validation before any changes
+
+#### 📊 Rich User Experience & Progress Tracking
+ - **PROFESSIONAL**: ReplicaManager class with planning, execution, and display methods
+ - **VISUAL**: Real-time progress bars with visual progress tracking during execution
+ - **FORMATTED**: Full-width tables with color-coded status indicators and professional styling
+ - **INFORMATIVE**: Executive summary panels and detailed recommendations
+ - **STATUS**: Live status updates for each index during replica update operations
+ - **RESULTS**: Comprehensive success/failure reporting with execution metrics
+
+#### 🔄 Output Formats & Automation Support
+ - **JSON**: Complete JSON export for both planning and execution results
+ - **STRUCTURED**: Machine-readable output format for monitoring system integration
+ - **AUTOMATION**: Force mode for non-interactive script execution
+ - **MONITORING**: Structured error reporting for automated failure handling
+ - **CONSISTENT**: Maintains escmd's established Rich library formatting standards
+ - **FLEXIBLE**: Both table (default) and JSON output modes for different use cases
+
+#### 🔧 Technical Implementation
+ - **ADDED**: `ReplicaManager` class in `esclient.py` with comprehensive replica management capabilities
+ - **ADDED**: `plan_replica_updates()` method for safe planning and validation
+ - **ADDED**: `execute_replica_updates()` method with progress tracking and error handling
+ - **ADDED**: `display_update_plan()` and `display_update_results()` methods for rich formatting
+ - **ADDED**: `handle_set_replicas()` command handler for standalone operations
+ - **ENHANCED**: `handle_cluster_check()` with integrated replica fixing workflow
+ - **INTEGRATED**: Seamless integration with existing authentication and configuration systems
+ - **MAINTAINED**: Full backward compatibility with all existing escmd functionality
+
+#### 🎯 Use Cases & Workflows
+ - **MAINTENANCE**: Routine replica fixes discovered during daily health checks
+ - **OPERATIONS**: Bulk replica management for index lifecycle operations
+ - **AUTOMATION**: Script-friendly replica management with JSON output and force mode
+ - **GOVERNANCE**: Systematic replica count standardization across index patterns
+ - **PRODUCTION**: Safe replica fixing with multiple validation layers and confirmation prompts
+ - **MONITORING**: Integration with monitoring systems via structured JSON output
+
+#### 💡 Command Examples
+```bash
+# Integrated health check + replica fixing
+./escmd.py cluster-check --fix-replicas 1 --dry-run
+./escmd.py cluster-check --fix-replicas 1 --force
+
+# Standalone replica management
+./escmd.py set-replicas --no-replicas-only --dry-run
+./escmd.py set-replicas --pattern "logs-*" --count 2
+./escmd.py set-replicas --indices "index1,index2" --count 1
+```
+
+## [2.3.0] - 2025-01-21
+### ✨ Enhanced Snapshot Management
+#### 📸 Comprehensive Snapshot Status Checking
+ - **NEW**: Added `snapshots status` command for detailed snapshot status information
+ - **NEW**: Support for checking specific snapshot job status with command: `./escmd.py -l <cluster> snapshots status <snapshot_name>`
+ - **ENHANCED**: Rich formatted display with color-coded status indicators (✅ SUCCESS, ⏳ IN_PROGRESS, ❌ FAILED, ⚠️ PARTIAL)
+ - **DETAILED**: Multi-panel layout showing snapshot information, statistics, progress, included indices, and failure details
+ - **FLEXIBLE**: Support for both table and JSON output formats via `--format` parameter
+ - **INTELLIGENT**: Repository auto-detection from cluster configuration with `--repository` override option
+ - **COMPREHENSIVE**: Real-time progress tracking for in-progress snapshots with shard-level statistics
+ - **INFORMATIVE**: Detailed failure analysis with index and shard-specific error information
+ - **PROFESSIONAL**: Consistent styling with existing escmd interface using Rich library panels and tables
+ - **ROBUST**: Comprehensive error handling for missing snapshots, repositories, and API errors
+
+#### 🔧 Technical Enhancements
+ - **ADDED**: `get_snapshot_status()` method in ElasticsearchClient for snapshot information retrieval
+ - **ADDED**: `display_snapshot_status()` method for formatted output with professional presentation
+ - **ADDED**: `_handle_snapshot_status()` command handler with full argument processing
+ - **ENHANCED**: Extended snapshot command framework to support multiple actions (list, status)
+ - **IMPROVED**: Repository validation and configuration lookup with helpful error messages
+ - **MAINTAINED**: Full backward compatibility with existing `snapshots list` functionality
+
+## [2.2.0] - 2025-08-20
+### 🔥 Major Feature: Enhanced Dangling Index Management
+#### 🚀 Advanced Bulk Cleanup Operations
+ - **NEW**: Added `--cleanup-all` flag for automatic deletion of all dangling indices in a single operation
+ - **NEW**: Added `--dry-run` mode to preview operations safely without making any changes
+ - **NEW**: Added comprehensive progress tracking with real-time progress bars and ETA calculations
+ - **NEW**: Added interactive confirmation prompts with detailed impact warnings for destructive operations
+ - **ENHANCED**: Bulk processing with efficient handling of multiple dangling indices simultaneously
+ - **SAFETY**: Pre-flight checks validate cluster state before operations begin
+
+#### ⚡ Advanced Retry Logic & Error Recovery
+ - **NEW**: Added `--max-retries` parameter for configurable retry attempts (default: 3)
+ - **NEW**: Added `--retry-delay` parameter for configurable delay between retries (default: 5 seconds)  
+ - **NEW**: Added `--timeout` parameter for configurable operation timeouts (default: 60 seconds)
+ - **INTELLIGENT**: Automatic retry for transient failures (timeouts, network issues, resource conflicts)
+ - **ROBUST**: Graceful handling of partial failures with detailed error tracking
+ - **RESILIENT**: Enhanced error recovery with specific handling for different failure types
+
+#### 📊 Professional Logging & Reporting
+ - **NEW**: Added `--log-file` parameter for optional file logging with structured output
+ - **ENHANCED**: Multi-destination logging with console and file output support
+ - **DETAILED**: Comprehensive operation summaries with success/failure statistics and timing
+ - **AUDIT**: Complete audit trail of all operations for compliance and troubleshooting
+ - **STRUCTURED**: Rich formatted output with color-coded status indicators and progress tracking
+
+#### ⚙️ Configuration Management
+ - **NEW**: Added `dangling_cleanup` configuration section in `elastic_servers.yml`
+ - **CONFIGURABLE**: Default settings for max_retries, retry_delay, timeout, logging level
+ - **FLEXIBLE**: Per-cluster configuration support with global defaults
+ - **PRODUCTION**: Production-ready settings with confirmation requirements and progress bars
+
+#### 🔧 Enhanced Command Options
+ - **NEW**: `--yes-i-really-mean-it` flag extended to bulk operations for automated workflows
+ - **IMPROVED**: Enhanced help system with comprehensive usage examples and safety guidelines
+ - **ENHANCED**: Rich formatted progress indicators with completion estimates and status updates
+ - **PROFESSIONAL**: Enterprise-grade error messages with specific recovery guidance
+
+#### 🛡️ Production Safety Features
+ - **ROBUST**: Comprehensive error handling with partial success tracking and graceful degradation
+ - **SAFE**: Interactive confirmation system requiring explicit user acknowledgment
+ - **MONITORED**: Real-time operation monitoring with detailed progress feedback
+ - **VALIDATED**: Pre-operation validation checks and post-operation result verification
+ - **RECOVERABLE**: Detailed logging and audit trails for operational transparency
+
+#### 📈 Performance & User Experience
+ - **FAST**: Optimized bulk operations with parallel processing capabilities
+ - **VISUAL**: Rich console formatting with progress bars, panels, and status indicators
+ - **INTUITIVE**: Clear command structure with comprehensive help and usage examples
+ - **RELIABLE**: Extensive testing and validation across different cluster configurations
+ - **SCALABLE**: Handles large numbers of dangling indices efficiently with progress tracking
+
 ## [2.1.0] - 2025-08-12
 ### 🐛 Bug Fixes
 #### Fixed Snapshot Repository Access & Python Version Compatibility

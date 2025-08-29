@@ -18,6 +18,7 @@ import re
 import requests
 import urllib3
 import warnings
+import sys
 
 # Suppress only the InsecureRequestWarning from urllib3 needed for Elasticsearch
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -27,6 +28,19 @@ requests.packages.urllib3.disable_warnings(DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="elasticsearch")
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 warnings.filterwarnings("ignore", message=".*verify_certs=False.*", category=Warning)
+
+# Check Elasticsearch client version for compatibility
+try:
+    from elasticsearch import __version__ as es_version
+    if isinstance(es_version, tuple):
+        ES_VERSION_MAJOR = es_version[0]
+    elif isinstance(es_version, str):
+        ES_VERSION_MAJOR = int(es_version.split('.')[0])
+    else:
+        ES_VERSION_MAJOR = 7  # Default fallback
+except (ImportError, AttributeError, ValueError, IndexError):
+    # Default to assume version 7.x if we can't detect
+    ES_VERSION_MAJOR = 7
 
 class ElasticsearchClient:
 
@@ -52,11 +66,37 @@ class ElasticsearchClient:
         try:
             # Use the low-level client for the DELETE endpoint
             # DELETE /_dangling/<index-uuid>?accept_data_loss=true
-            resp = self.es.transport.perform_request(
-                'DELETE', 
-                f'/_dangling/{uuid}',
-                params={'accept_data_loss': 'true'}
-            )
+            # Handle version compatibility between ES client 7.x and 8.x
+
+            if ES_VERSION_MAJOR >= 8:
+                # ES client 8.x+ - query parameters included in URL path
+                try:
+                    resp = self.es.transport.perform_request(
+                        'DELETE',
+                        f'/_dangling/{uuid}?accept_data_loss=true'
+                    )
+                except TypeError:
+                    # Fallback to 7.x style if the 8.x approach fails
+                    resp = self.es.transport.perform_request(
+                        'DELETE',
+                        f'/_dangling/{uuid}',
+                        params={'accept_data_loss': 'true'}
+                    )
+            else:
+                # ES client 7.x - use params keyword argument
+                try:
+                    resp = self.es.transport.perform_request(
+                        'DELETE',
+                        f'/_dangling/{uuid}',
+                        params={'accept_data_loss': 'true'}
+                    )
+                except TypeError:
+                    # Fallback to 8.x style if the 7.x approach fails
+                    resp = self.es.transport.perform_request(
+                        'DELETE',
+                        f'/_dangling/{uuid}?accept_data_loss=true'
+                    )
+
             # Handle both dictionary response (older versions) and TransportApiResponse (newer versions)
             if hasattr(resp, 'body'):
                 return resp.body
@@ -70,7 +110,7 @@ class ElasticsearchClient:
 
     def resolve_node_ids_to_hostnames(self, node_ids, node_id_to_hostname_map=None):
         """Resolve a list of node IDs to their corresponding hostnames.
-        
+
         Args:
             node_ids: List of node IDs to resolve
             node_id_to_hostname_map: Optional pre-built mapping to avoid API calls
@@ -80,20 +120,20 @@ class ElasticsearchClient:
             if node_id_to_hostname_map is None:
                 # Get node information
                 nodes_data = self.get_nodes()
-                
+
                 # Create mapping of node ID to hostname
                 node_id_to_hostname_map = {}
                 for node in nodes_data:
                     node_id_to_hostname_map[node['nodeid']] = node['hostname']
-            
+
             # Resolve node IDs to hostnames
             resolved_nodes = []
             for node_id in node_ids:
                 hostname = node_id_to_hostname_map.get(node_id, f"Unknown({node_id[:8]})")
                 resolved_nodes.append(hostname)
-            
+
             return resolved_nodes
-            
+
         except Exception as e:
             # If resolution fails, return node IDs with error indication
             return [f"Error({node_id[:8]})" for node_id in node_ids]
@@ -114,6 +154,7 @@ class ElasticsearchClient:
         self.port = port
         self.use_ssl = use_ssl
         self.verify_certs = verify_certs
+        self.timeout = timeout
         self.box_style = box_style
         self.elastic_authentication = elastic_authentication
         self.elastic_username = elastic_username
@@ -147,18 +188,41 @@ class ElasticsearchClient:
             self.cluster_indices_patterns = self.extract_unique_patterns(self.cluster_indices)
             self.cluster_indices_hot_indexes = self.find_latest_indices(self.cluster_indices)
 
+    def pretty_print_json(self, data, indent=2):
+        """
+        Pretty print JSON data with Rich formatting if outputting to terminal,
+        otherwise use standard JSON output for pipe/redirect compatibility.
+        
+        Args:
+            data: Data to serialize to JSON
+            indent: Indentation level for pretty printing (default: 2)
+        """
+        if sys.stdout.isatty():
+            # Output is going to terminal - use Rich pretty printing
+            from rich.syntax import Syntax
+            from rich.console import Console
+            json_str = json.dumps(data, indent=indent, ensure_ascii=False)
+            syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
+            # Create a fresh console instance to avoid any global state issues
+            console = Console(file=sys.stdout, force_terminal=True)
+            console.print(syntax)
+        else:
+            # Output is piped/redirected - use standard JSON with no formatting
+            json.dump(data, sys.stdout, separators=(',', ':'), ensure_ascii=False)
+            sys.stdout.write('\n')  # Add single newline
+
     def _call_with_version_compatibility(self, method, primary_kwargs, fallback_kwargs):
         """
         Call an Elasticsearch method with version compatibility fallback.
-        
+
         Args:
             method: The Elasticsearch client method to call
             primary_kwargs: Primary set of keyword arguments to try
             fallback_kwargs: Fallback set of keyword arguments for older versions
-            
+
         Returns:
             The result of the method call
-            
+
         Raises:
             The last exception if both attempts fail
         """
@@ -460,7 +524,18 @@ class ElasticsearchClient:
 
         # Apply pattern filter if provided
         if pattern:
-            regex = re.compile(f".*{re.escape(pattern)}.*")  # Wildcard around the pattern
+            # Check if pattern contains shell-style wildcards
+            if '*' in pattern or '?' in pattern:
+                # Convert shell-style wildcards to regex
+                # Escape regex special chars but preserve * and ?
+                escaped = re.escape(pattern)
+                # Convert escaped wildcards back to regex equivalents
+                escaped = escaped.replace(r'\*', '.*').replace(r'\?', '.')
+                regex = re.compile(f"^{escaped}$")  # Exact match with wildcards
+            else:
+                # Original behavior: substring match
+                regex = re.compile(f".*{re.escape(pattern)}.*")  # Wildcard around the pattern
+            
             filtered_indices = [index for index in filtered_indices if regex.search(index.get("index", ""))]
 
         # Apply status filter if provided
@@ -597,9 +672,118 @@ class ElasticsearchClient:
         else:
             return self.es.indices.get_template()
 
+    def get_nodes_fast(self):
+        """
+        Get basic node information quickly for dashboard (minimal API calls).
+        
+        Returns:
+            list: Basic node information without expensive details
+        """
+        try:
+            # Only get basic node stats - skip detailed info and shard allocation
+            stats = self.es.nodes.stats()
+            node_stats = self.parse_node_stats(stats)
+            
+            # Skip version info and shard allocation for speed
+            # Just add minimal defaults
+            for node in node_stats:
+                node.update({
+                    'version': 'N/A',  # Skip version lookup for speed
+                    'build_hash': None,
+                    'build_date': '',
+                    'indices_count': 0  # Skip shard allocation lookup for speed
+                })
+            
+            return sorted(node_stats, key=lambda x: x['name'])
+            
+        except Exception:
+            return []
+
     def get_nodes(self):
+        # Get node statistics
         stats = self.es.nodes.stats()
         node_stats = self.parse_node_stats(stats)
+        
+        # Get node information (including version details)
+        try:
+            nodes_info = self.es.nodes.info()
+            # Create a map of node_id -> version info
+            version_info = {}
+            for node_id, node_data in nodes_info.get('nodes', {}).items():
+                version_data = node_data.get('version', {})
+                
+                # Handle different version response formats
+                if isinstance(version_data, dict):
+                    # Standard format: {"number": "7.17.29", "build_hash": "...", ...}
+                    version = version_data.get('number', 'Unknown')
+                    build_hash = version_data.get('build_hash', '')[:8] if version_data.get('build_hash') else None
+                    build_date = version_data.get('build_date', '')
+                elif isinstance(version_data, str):
+                    # Simple string format: "7.17.29"
+                    version = version_data
+                    build_hash = None
+                    build_date = ''
+                else:
+                    version = 'Unknown'
+                    build_hash = None
+                    build_date = ''
+                
+                version_info[node_id] = {
+                    'version': version,
+                    'build_hash': build_hash,
+                    'build_date': build_date
+                }
+            
+            # Merge version info into node stats
+            for node in node_stats:
+                node_id = node.get('nodeid')
+                if node_id in version_info:
+                    node.update(version_info[node_id])
+                else:
+                    # Fallback if version info not available for this node
+                    node.update({
+                        'version': 'Unknown',
+                        'build_hash': None,
+                        'build_date': ''
+                    })
+                    
+        except Exception:
+            # If we can't get version info, add defaults
+            for node in node_stats:
+                node.update({
+                    'version': 'Unknown',
+                    'build_hash': None,
+                    'build_date': ''
+                })
+        
+        # Get actual indices per node by checking shard allocation
+        try:
+            # Get shard allocation information
+            shards = self.es.cat.shards(format='json')
+            
+            # Create a map of node -> set of unique indices
+            indices_per_node = {}
+            for shard in shards:
+                node_name = shard.get('node')
+                index_name = shard.get('index')
+                if node_name and index_name:
+                    if node_name not in indices_per_node:
+                        indices_per_node[node_name] = set()
+                    indices_per_node[node_name].add(index_name)
+            
+            # Update node stats with actual indices count
+            for node in node_stats:
+                node_name = node.get('name')
+                if node_name in indices_per_node:
+                    node['indices_count'] = len(indices_per_node[node_name])
+                else:
+                    node['indices_count'] = 0
+                    
+        except Exception:
+            # If we can't get shard allocation info, fall back to 0
+            for node in node_stats:
+                node['indices_count'] = 0
+        
         nodes_sorted = sorted(node_stats, key=lambda x: x['name'])
         return nodes_sorted
 
@@ -621,7 +805,94 @@ class ElasticsearchClient:
         nodes_stats = self.es.nodes.stats()
         return nodes_stats['nodes']
 
-    def get_cluster_health(self):
+    def get_cluster_info(self):
+        """
+        Get comprehensive cluster information including version details.
+        
+        Returns:
+            dict: Cluster information including name, version, build details
+        """
+        try:
+            # Get cluster stats for comprehensive information
+            cluster_stats = self.es.cluster.stats()
+            
+            # Extract version information - ES returns versions as simple list in nodes.versions
+            versions_list = cluster_stats.get('nodes', {}).get('versions', [])
+            if versions_list:
+                # For mixed-version clusters, take the first version or most common one
+                if len(versions_list) == 1:
+                    cluster_version = versions_list[0]
+                    version_count = cluster_stats.get('nodes', {}).get('count', {}).get('total', 1)
+                else:
+                    # In mixed version clusters, take the first version
+                    cluster_version = versions_list[0]
+                    version_count = 1
+            else:
+                cluster_version = 'Unknown'
+                version_count = 0
+            
+            # Get cluster name and basic stats
+            cluster_name = cluster_stats.get('cluster_name', 'Unknown')
+            total_nodes = cluster_stats.get('nodes', {}).get('count', {}).get('total', 0)
+            
+            # Try to get build information from individual node
+            try:
+                nodes_info = self.es.nodes.info()
+                build_hash = None
+                build_date = None
+                
+                # Get build info from the first available node
+                for node_id, node_data in nodes_info.get('nodes', {}).items():
+                    version_data = node_data.get('version', {})
+                    if version_data:
+                        build_hash = version_data.get('build_hash', '')[:8]  # Short hash
+                        build_date = version_data.get('build_date', '')
+                        break
+                        
+            except Exception:
+                build_hash = None
+                build_date = None
+            
+            return {
+                'cluster_name': cluster_name,
+                'version': cluster_version,
+                'build_hash': build_hash,
+                'build_date': build_date,
+                'version_count': version_count,
+                'total_nodes': total_nodes,
+                'mixed_versions': len(versions_list) > 1,
+                'all_versions': versions_list if len(versions_list) > 1 else []
+            }
+            
+        except Exception as e:
+            # Fallback to basic cluster health for cluster name
+            try:
+                health = self.es.cluster.health()
+                return {
+                    'cluster_name': health.get('cluster_name', 'Unknown'),
+                    'version': 'Unknown',
+                    'build_hash': None,
+                    'build_date': None,
+                    'version_count': 0,
+                    'total_nodes': health.get('number_of_nodes', 0),
+                    'mixed_versions': False,
+                    'all_versions': [],
+                    'error': str(e)
+                }
+            except:
+                return {
+                    'cluster_name': 'Unknown',
+                    'version': 'Unknown',
+                    'build_hash': None,
+                    'build_date': None,
+                    'version_count': 0,
+                    'total_nodes': 0,
+                    'mixed_versions': False,
+                    'all_versions': [],
+                    'error': str(e)
+                }
+
+    def get_cluster_health(self, include_version=True):
 
         # Retrieve cluster health
         cluster_health = self.es.cluster.health()
@@ -638,6 +909,26 @@ class ElasticsearchClient:
             'number_of_in_flight_fetch': cluster_health['number_of_in_flight_fetch'],
             'active_shards_percent': cluster_health['active_shards_percent_as_number']
         }
+
+        # Add version information if requested
+        if include_version:
+            try:
+                cluster_info = self.get_cluster_info()
+                cluster_data.update({
+                    'cluster_version': cluster_info['version'],
+                    'build_hash': cluster_info['build_hash'],
+                    'build_date': cluster_info['build_date'],
+                    'mixed_versions': cluster_info['mixed_versions'],
+                    'all_versions': cluster_info['all_versions']
+                })
+            except Exception:
+                cluster_data.update({
+                    'cluster_version': 'Unknown',
+                    'build_hash': None,
+                    'build_date': None,
+                    'mixed_versions': False,
+                    'all_versions': []
+                })
 
         return cluster_data
 
@@ -922,7 +1213,7 @@ class ElasticsearchClient:
 
         # Create current allocation panel
         if current_allocation.get('allocated', False):
-            allocation_table = Table.grid(padding=(0, 1))
+            allocation_table = Table.grid(padding=(0, 3))
             allocation_table.add_column(style="bold white", no_wrap=True)
             allocation_table.add_column(style="bold green")
 
@@ -945,7 +1236,7 @@ class ElasticsearchClient:
         else:
             # Unassigned details
             unassigned_details = explain_result.get('unassigned_details', {})
-            allocation_table = Table.grid(padding=(0, 1))
+            allocation_table = Table.grid(padding=(0, 3))
             allocation_table.add_column(style="bold white", no_wrap=True)
             allocation_table.add_column(style="bold red")
 
@@ -967,7 +1258,7 @@ class ElasticsearchClient:
             )
 
         # Create summary panel
-        summary_table = Table.grid(padding=(0, 1))
+        summary_table = Table.grid(padding=(0, 3))
         summary_table.add_column(style="bold white", no_wrap=True)
         summary_table.add_column(style=f"bold {theme_color}")
 
@@ -1075,7 +1366,7 @@ class ElasticsearchClient:
                 )
 
         # Create quick actions panel
-        actions_table = Table.grid(padding=(0, 1))
+        actions_table = Table.grid(padding=(0, 3))
         actions_table.add_column(style="bold magenta", no_wrap=True)
         actions_table.add_column(style="dim white")
 
@@ -1185,7 +1476,7 @@ class ElasticsearchClient:
             return None
 
         # Create inner table
-        table = Table.grid(padding=(0, 1))
+        table = Table.grid(padding=(0, 3))
         table.add_column(style="bold white", no_wrap=True)
         table.add_column(style=f"bold {allocation_issues['theme_color']}")
 
@@ -1398,12 +1689,34 @@ class ElasticsearchClient:
 
         self.pattern = pattern
 
-        # Get all indices
-        if (self.pattern == None):
-            indices = self.es.cat.shards(format='json')
+        # Get all shards
+        if (self.pattern == None or self.pattern == '*'):
+            shards = self.es.cat.shards(format='json')
         else:
-            search_pattern = f".*{self.pattern}.*"
-            shards = self.es.cat.shards(format='json', index=search_pattern)
+            # Check if pattern contains shell-style wildcards
+            if '*' in self.pattern or '?' in self.pattern:
+                # Use pattern directly for Elasticsearch index matching
+                search_pattern = self.pattern
+            else:
+                # For substring patterns, add wildcards for ES index matching
+                search_pattern = f"*{self.pattern}*"
+            
+            try:
+                shards = self.es.cat.shards(format='json', index=search_pattern)
+            except Exception as e:
+                # If ES index pattern fails, get all shards and filter manually
+                all_shards = self.es.cat.shards(format='json')
+                if '*' in self.pattern or '?' in self.pattern:
+                    # Convert shell-style wildcards to regex for filtering
+                    import re
+                    escaped = re.escape(self.pattern)
+                    escaped = escaped.replace(r'\*', '.*').replace(r'\?', '.')
+                    regex = re.compile(f"^{escaped}$")
+                    shards = [s for s in all_shards if regex.search(s.get('index', ''))]
+                else:
+                    # Substring matching
+                    shards = [s for s in all_shards if self.pattern in s.get('index', '')]
+                    
         return shards
 
     def list_indices_stats(self, pattern=None, status=None):
@@ -1507,14 +1820,14 @@ class ElasticsearchClient:
             response = self.es.cat.shards(format="json")
             for shard_info in response:
                 shard_dict = {
-                    "index": shard_info["index"],
-                    "shard": shard_info["shard"],
-                    "prirep": shard_info["prirep"],
-                    "state": shard_info["state"],
-                    "docs": shard_info["docs"],
-                    "store": shard_info["store"],
-                    "size": self.size_to_bytes(shard_info["store"]),
-                    "node": shard_info["node"]
+                    "index": shard_info.get("index", ""),
+                    "shard": shard_info.get("shard", ""),
+                    "prirep": shard_info.get("prirep", ""),
+                    "state": shard_info.get("state", ""),
+                    "docs": shard_info.get("docs", ""),
+                    "store": shard_info.get("store", ""),
+                    "size": self.size_to_bytes(shard_info.get("store", "0b")),
+                    "node": shard_info.get("node", "")
                 }
                 shards_info_list.append(shard_dict)
         except Exception as e:
@@ -2088,24 +2401,46 @@ class ElasticsearchClient:
             role_key = ', '.join(sorted(roles)) if roles else 'none'
             node_roles[role_key] = node_roles.get(role_key, 0) + 1
 
-        # Create title panel
+        # Create title panel with version information
         filter_text = " (Data Nodes Only)" if show_data_only else ""
+        
+        # Get cluster version info
+        try:
+            health_data = self.get_cluster_health()
+            cluster_name = health_data.get('cluster_name', 'Unknown')
+            cluster_version = health_data.get('cluster_version', 'Unknown')
+            mixed_versions = health_data.get('mixed_versions', False)
+        except Exception:
+            cluster_name = 'Unknown'
+            cluster_version = 'Unknown'
+            mixed_versions = False
+
+        # Build enhanced title with version info
+        if cluster_version != 'Unknown':
+            if mixed_versions:
+                nodes_title = f"🖥️  Elasticsearch Nodes: {cluster_name} (v{cluster_version} - Mixed Versions){filter_text}"
+            else:
+                nodes_title = f"🖥️  Elasticsearch Nodes: {cluster_name} (v{cluster_version}){filter_text}"
+        else:
+            nodes_title = f"🖥️  Elasticsearch Nodes: {cluster_name}{filter_text}"
+
         title_panel = Panel(
-            Text(f"🖥️  Elasticsearch Nodes Overview{filter_text}", style="bold cyan", justify="center"),
+            Text(nodes_title, style="bold cyan", justify="center"),
             subtitle=f"Total: {total_nodes} | Master-eligible: {master_eligible} | Data: {data_nodes} | Ingest: {ingest_nodes} | Client: {client_nodes}",
             border_style="cyan",
             padding=(1, 2)
         )
 
         # Check if we have meaningful node IDs
-        has_node_ids = any(node.get('node', 'Unknown') != 'Unknown' for node in nodes)
+        has_node_ids = any(node.get('nodeid', 'Unknown') != 'Unknown' for node in nodes)
 
         # Create enhanced nodes table
         table = Table(show_header=True, header_style="bold white", title="🖥️  Node Details", expand=True)
-        table.add_column("📛 Node Name", no_wrap=True)
-        table.add_column("🌐 Hostname", no_wrap=True)
+        table.add_column("📛 Node Name", no_wrap=True, width=25)
         if has_node_ids:
-            table.add_column("🆔 Node ID", width=12)
+            table.add_column("🆔 Node ID", width=12, justify="center")
+        table.add_column("🔧 ES Version", width=12, justify="center", no_wrap=True)
+        table.add_column("📄 Indices", justify="center", width=8)
         table.add_column("👑 Master", justify="center", width=8)
         table.add_column("💾 Data", justify="center", width=6)
         table.add_column("🔄 Ingest", justify="center", width=8)
@@ -2134,8 +2469,25 @@ class ElasticsearchClient:
         for node in sorted_nodes:
             name = node.get('name', 'Unknown')
             hostname = node.get('hostname', 'Unknown')
-            node_id = node.get('node', 'Unknown')[:12]  # Truncate for display
+            node_id = node.get('nodeid', 'Unknown')[:12]  # Truncate for display
             roles = node.get('roles', [])
+            
+            # Get version information
+            version = node.get('version', 'Unknown')
+            build_hash = node.get('build_hash')
+            indices_count = node.get('indices_count', 0)  # Get actual indices count
+            
+            # Format version display
+            if version != 'Unknown':
+                if build_hash:
+                    version_display = f"v{version}"
+                else:
+                    version_display = f"v{version}"
+            else:
+                version_display = "Unknown"
+            
+            # Format node name with hostname in parentheses
+            node_display_name = f"{name} ({hostname})"
 
             # Determine node type indicators
             is_master_eligible = 'master' in roles
@@ -2171,15 +2523,17 @@ class ElasticsearchClient:
                 status_text = "Other"
 
             # Role indicators
-            master_indicator = "👑" if is_current_master else "⚙️" if is_master_eligible else "❌"
-            data_indicator = "✅" if is_data else "❌"
-            ingest_indicator = "✅" if is_ingest else "❌"
-            client_indicator = "✅" if is_client else "❌"
+            master_indicator = " ★ " if is_current_master else " ○ " if is_master_eligible else " - "
+            data_indicator = " ● " if is_data else " - "
+            ingest_indicator = " ● " if is_ingest else " - "
+            client_indicator = " ● " if is_client else " - "
 
             # Build row data conditionally
-            row_data = [name, hostname]
+            row_data = [node_display_name]  # Use the formatted name with hostname
             if has_node_ids:
                 row_data.append(node_id)
+            row_data.append(version_display)  # Add version column
+            row_data.append(f"{indices_count:,}")  # Add indices count with comma formatting
             row_data.extend([
                 master_indicator,
                 data_indicator,
@@ -2374,11 +2728,29 @@ class ElasticsearchClient:
     def print_table_from_dict(self, title, data_dict):
         console = Console()
 
-        table = Table(show_header=True, title=title, header_style="bold cyan", box=self.box_style)
+        # Enhance title with version information if available
+        enhanced_title = title
+        if 'cluster_version' in data_dict and 'cluster_name' in data_dict:
+            cluster_name = data_dict['cluster_name']
+            cluster_version = data_dict.get('cluster_version', 'Unknown')
+            mixed_versions = data_dict.get('mixed_versions', False)
+            
+            if mixed_versions:
+                version_display = f"v{cluster_version} (mixed)"
+                enhanced_title = f"📋 Elasticsearch Cluster: {cluster_name} ({version_display})"
+            elif cluster_version != 'Unknown':
+                enhanced_title = f"📋 Elasticsearch Cluster: {cluster_name} (v{cluster_version})"
+            else:
+                enhanced_title = f"📋 Elasticsearch Cluster: {cluster_name}"
+
+        table = Table(show_header=True, title=enhanced_title, header_style="bold cyan", box=self.box_style)
         table.add_column("Key")
         table.add_column("Value")
 
         for key, value in data_dict.items():
+            # Skip version fields as they're now in the title
+            if key in ['cluster_version', 'build_hash', 'build_date', 'mixed_versions', 'all_versions']:
+                continue
 
             if key == "cluster_status":
                 if value == "green":
@@ -2390,6 +2762,21 @@ class ElasticsearchClient:
                 elif value == "red":
                     value = "[red]red[/red] ❌"
                     color = "red"
+
+            elif key == "cluster_name" and 'cluster_version' in data_dict:
+                # Enhance cluster name display with version details
+                cluster_version = data_dict.get('cluster_version', 'Unknown')
+                build_hash = data_dict.get('build_hash')
+                
+                if cluster_version != 'Unknown':
+                    version_text = f"v{cluster_version}"
+                    if build_hash:
+                        version_text += f" (build: {build_hash})"
+                    value = f"{value} | {version_text}"
+                
+                # Add mixed version warning if applicable
+                if data_dict.get('mixed_versions', False):
+                    value += " ⚠️ Mixed versions detected"
 
             elif key == "active_shards_percent":
                 value = float(value)  # Ensure value is treated as a float
@@ -2406,6 +2793,15 @@ class ElasticsearchClient:
 
         console = Console()
         cluster_all_settings = self.get_all_index_settings()
+
+        # Get cluster health data for version info
+        try:
+            health_data = self.get_cluster_health()
+            cluster_name = health_data.get('cluster_name', 'Unknown')
+            cluster_version = health_data.get('cluster_version', 'Unknown')
+        except Exception:
+            cluster_name = 'Unknown'
+            cluster_version = 'Unknown'
 
         # Create title panel
         total_indices = len(data_dict)
@@ -2427,8 +2823,14 @@ class ElasticsearchClient:
                 if frozen_status == "true":
                     frozen_count += 1
 
+        # Build enhanced title with version info
+        if cluster_version != 'Unknown':
+            indices_title = f"📊 Elasticsearch Indices: {cluster_name} (v{cluster_version})"
+        else:
+            indices_title = f"📊 Elasticsearch Indices: {cluster_name}"
+
         title_panel = Panel(
-            Text(f"📊 Elasticsearch Indices Overview", style="bold cyan", justify="center"),
+            Text(indices_title, style="bold cyan", justify="center"),
             subtitle=f"Total: {total_indices} | Green: {health_counts.get('green', 0)} | Yellow: {health_counts.get('yellow', 0)} | Red: {health_counts.get('red', 0)} | Hot: {hot_count} | Frozen: {frozen_count}",
             border_style="cyan",
             padding=(1, 2)
@@ -3686,14 +4088,20 @@ class ElasticsearchClient:
             console.print(f"[red]❌ Error retrieving ILM policies: {policies['error']}[/red]")
             return
 
-        # Get cluster name for context
+        # Get cluster name and version for context
         health_data = self.get_cluster_health()
         cluster_name = health_data.get('cluster_name', 'Unknown')
+        cluster_version = health_data.get('cluster_version', 'Unknown')
 
-        # Create title panel
+        # Create title panel with version info
+        if cluster_version != 'Unknown':
+            cluster_info = f"Cluster: {cluster_name} (v{cluster_version})"
+        else:
+            cluster_info = f"Cluster: {cluster_name}"
+            
         title_panel = Panel(
             Text(f"📋 ILM Policies Overview", style="bold cyan", justify="center"),
-            subtitle=f"Cluster: {cluster_name} | Total Policies: {len(policies)}",
+            subtitle=f"{cluster_info} | Total Policies: {len(policies)}",
             border_style="cyan",
             padding=(1, 2)
         )
@@ -3726,7 +4134,7 @@ class ElasticsearchClient:
         print()
 
     def print_enhanced_ilm_policy_detail(self, policy_name, show_all_indices=False):
-        """Display detailed information for a specific ILM policy."""
+        """Display detailed information for a specific ILM policy with improved readability."""
         from rich.panel import Panel
         from rich.table import Table
         from rich.console import Console
@@ -3740,128 +4148,241 @@ class ElasticsearchClient:
             console.print(f"[red]❌ Error retrieving policy '{policy_name}': {policy_data['error']}[/red]")
             return
 
-        # Get cluster name for context
+        # Get cluster name and version for context
         health_data = self.get_cluster_health()
         cluster_name = health_data.get('cluster_name', 'Unknown')
+        cluster_version = health_data.get('cluster_version', 'Unknown')
 
         policy_info = policy_data[policy_name]
         policy_def = policy_info.get('policy', {})
         phases = policy_def.get('phases', {})
         using_indices = policy_info.get('using_indices', [])
 
-        # Create title panel
+        # Analyze phases and indices for summary
+        active_phases = list(phases.keys())
+        phase_stats = {}
+        for index in using_indices:
+            phase = index.get('phase', 'unknown')
+            phase_stats[phase] = phase_stats.get(phase, 0) + 1
+
+        # Create title panel with enhanced summary including version
+        active_phases_str = " → ".join([f"{phase.title()} {self._get_phase_icon(phase)}" for phase in ['hot', 'warm', 'cold', 'frozen', 'delete'] if phase in phases])
+        if not active_phases_str:
+            active_phases_str = "No phases configured"
+
+        # Build subtitle with cluster info and version
+        if cluster_version != 'Unknown':
+            cluster_info = f"Cluster: {cluster_name} (v{cluster_version})"
+        else:
+            cluster_info = f"Cluster: {cluster_name}"
+            
         title_panel = Panel(
-            Text(f"📋 ILM Policy Details: {policy_name}", style="bold cyan", justify="center"),
-            subtitle=f"Cluster: {cluster_name} | Version: {policy_info.get('version', 'N/A')} | Indices Using: {len(using_indices)}",
+            Text(f"📋 ILM Policy: {policy_name}", style="bold cyan", justify="center"),
+            subtitle=f"{cluster_info} | Version: {policy_info.get('version', 'N/A')} | Lifecycle: {active_phases_str} | Managing {len(using_indices)} indices",
             border_style="cyan",
             padding=(1, 2)
         )
 
-        # Create phases overview table
-        phases_table = Table(show_header=True, header_style="bold white", box=None)
-        phases_table.add_column("🔄 Phase", style="bold", no_wrap=True)
-        phases_table.add_column("📊 Status", justify="center", width=12)
-        phases_table.add_column("⚙️ Actions", style="dim")
-        phases_table.add_column("⏱️ Transitions", style="dim")
-
+        # Create individual phase cards instead of a single table
+        phase_panels = []
         phase_order = ['hot', 'warm', 'cold', 'frozen', 'delete']
+        
         for phase_name in phase_order:
             if phase_name in phases:
                 phase_config = phases[phase_name]
-                status = f"✅ {self._get_phase_icon(phase_name)}"
+                
+                # Create phase details table
+                phase_table = Table(show_header=False, box=None, padding=(0, 1))
+                phase_table.add_column("Detail", style="bold", no_wrap=True, width=12)
+                phase_table.add_column("Value", style="white")
 
-                # Get actions
+                # Get actions with better formatting
                 actions = []
                 if 'actions' in phase_config:
-                    for action_name in phase_config['actions'].keys():
-                        actions.append(action_name.replace('_', ' ').title())
-                actions_str = ", ".join(actions) if actions else "None"
-
-                # Get transitions
-                transitions = []
-                if 'min_age' in phase_config:
-                    transitions.append(f"Age: {phase_config['min_age']}")
-                if 'actions' in phase_config:
                     for action_name, action_config in phase_config['actions'].items():
-                        if action_name == 'rollover' and isinstance(action_config, dict):
+                        action_display = action_name.replace('_', ' ').title()
+                        if isinstance(action_config, dict) and action_config:
+                            # Show key configuration details
+                            config_items = []
                             for key, value in action_config.items():
-                                transitions.append(f"{key}: {value}")
-                transitions_str = ", ".join(transitions) if transitions else "Immediate"
+                                config_items.append(f"{key}: {value}")
+                            if config_items:
+                                action_display += f" ({', '.join(config_items)})"
+                        actions.append(action_display)
 
-                phases_table.add_row(phase_name.title(), status, actions_str, transitions_str)
-            else:
-                phases_table.add_row(phase_name.title(), f"❌ Not configured", "", "")
+                # Add phase information
+                phase_table.add_row("Status:", f"✅ Active {self._get_phase_icon(phase_name)}")
+                
+                if 'min_age' in phase_config:
+                    phase_table.add_row("Trigger:", f"After {phase_config['min_age']}")
+                else:
+                    phase_table.add_row("Trigger:", "Immediate")
+                
+                if actions:
+                    phase_table.add_row("Actions:", f"{len(actions)} configured")
+                    for i, action in enumerate(actions, 1):
+                        phase_table.add_row(f"  └─ Action {i}:", action)
+                else:
+                    phase_table.add_row("Actions:", "None")
 
-        phases_panel = Panel(
-            phases_table,
-            title="🔄 Phase Configuration",
-            border_style="blue",
-            padding=(1, 1)
-        )
+                # Add index count in this phase
+                indices_in_phase = phase_stats.get(phase_name, 0)
+                if indices_in_phase > 0:
+                    phase_table.add_row("Indices:", f"{indices_in_phase} currently in this phase")
 
-        # Create using indices table (if any)
+                # Create phase panel with appropriate color
+                phase_colors = {
+                    'hot': 'red',
+                    'warm': 'yellow', 
+                    'cold': 'blue',
+                    'frozen': 'cyan',
+                    'delete': 'magenta'
+                }
+                
+                phase_panel = Panel(
+                    phase_table,
+                    title=f"[bold]{self._get_phase_icon(phase_name)} {phase_name.title()} Phase",
+                    border_style=phase_colors.get(phase_name, 'white'),
+                    padding=(1, 1)
+                )
+                phase_panels.append(phase_panel)
+
+        # Create lifecycle flow visualization
+        if phase_panels:
+            # Group phase panels in rows of 2 for better readability
+            flow_content = "📋 **Policy Lifecycle Flow**\n\n"
+            configured_phases = [p for p in phase_order if p in phases]
+            
+            for i, phase in enumerate(configured_phases):
+                arrow = " → " if i < len(configured_phases) - 1 else ""
+                flow_content += f"{self._get_phase_icon(phase)} **{phase.title()}**{arrow}"
+            
+            flow_panel = Panel(
+                Text(flow_content, style="bold white"),
+                title="🔄 Lifecycle Overview",
+                border_style="green",
+                padding=(1, 2)
+            )
+
+        # Create enhanced indices display with better organization
         if using_indices:
-            indices_table = Table(show_header=True, header_style="bold white", box=None)
+            # Group indices by phase for better readability
+            indices_by_phase = {}
+            for index in using_indices:
+                phase = index.get('phase', 'unknown')
+                if phase not in indices_by_phase:
+                    indices_by_phase[phase] = []
+                indices_by_phase[phase].append(index)
+
+            # Create summary stats
+            summary_table = Table(show_header=False, box=None, padding=(0, 1))
+            summary_table.add_column("Phase", style="bold", width=12)
+            summary_table.add_column("Count", justify="center", width=8)
+            summary_table.add_column("Icon", justify="center", width=6)
+
+            for phase in phase_order:
+                if phase in indices_by_phase:
+                    count = len(indices_by_phase[phase])
+                    summary_table.add_row(
+                        f"{phase.title()}:",
+                        f"{count}",
+                        self._get_phase_icon(phase)
+                    )
+
+            summary_panel = Panel(
+                summary_table,
+                title="� Indices Distribution by Phase",
+                border_style="blue",
+                padding=(1, 1)
+            )
+
+            # Create detailed indices table
+            indices_table = Table(show_header=True, header_style="bold white", expand=True)
             indices_table.add_column("📁 Index Name", style="cyan", no_wrap=True)
-            indices_table.add_column("🔄 Current Phase", justify="center", width=15)
-            indices_table.add_column("⚙️ Current Action", style="dim")
-            indices_table.add_column("📊 Managed", justify="center", width=10)
+            indices_table.add_column("🔄 Phase", justify="center", width=12)
+            indices_table.add_column("⚙️ Action", style="dim", width=20)
+            indices_table.add_column("📊 Status", justify="center", width=10)
+
+            # Sort indices by phase, then by name
+            sorted_indices = sorted(using_indices, key=lambda x: (
+                phase_order.index(x.get('phase', 'unknown')) if x.get('phase', 'unknown') in phase_order else 999,
+                x.get('name', '')
+            ))
 
             # Determine how many indices to show
-            indices_to_show = using_indices if show_all_indices else using_indices[:10]
+            indices_to_show = sorted_indices if show_all_indices else sorted_indices[:15]  # Increased from 10
 
+            current_phase = None
             for index in indices_to_show:
-                phase_display = f"{index['phase']} {self._get_phase_icon(index['phase'])}"
-                managed_display = "✅ Yes" if index['managed'] else "❌ No"
+                phase = index.get('phase', 'unknown')
+                
+                # Add phase separator for better visual grouping
+                if phase != current_phase and len(indices_to_show) > 5:  # Only show separators for larger lists
+                    if current_phase is not None:  # Not the first phase
+                        indices_table.add_row("", "", "", "")  # Empty separator row
+                    current_phase = phase
+
+                phase_display = f"{self._get_phase_icon(phase)} {phase.title()}"
+                managed_display = "✅ Managed" if index.get('managed', False) else "⚠️ Unmanaged"
+                
                 indices_table.add_row(
-                    index['name'],
+                    index.get('name', 'Unknown'),
                     phase_display,
-                    index['action'],
+                    index.get('action', 'N/A'),
                     managed_display
                 )
 
-            # Add "more" indicator only if not showing all and there are more than 10
-            if not show_all_indices and len(using_indices) > 10:
-                indices_table.add_row("...", f"and {len(using_indices) - 10} more", "", "")
+            # Add "more" indicator with better styling
+            if not show_all_indices and len(using_indices) > 15:
+                indices_table.add_row(
+                    "...", 
+                    f"[dim]+{len(using_indices) - 15} more[/dim]", 
+                    "[dim]Use --show-all to see all[/dim]", 
+                    ""
+                )
 
-            # Create appropriate title based on display mode
-            if show_all_indices or len(using_indices) <= 10:
-                title = f"📁 Indices Using This Policy ({len(using_indices)} total)"
+            # Create enhanced indices panel
+            if show_all_indices or len(using_indices) <= 15:
+                indices_title = f"📁 All Indices Using This Policy ({len(using_indices)} total)"
             else:
-                title = f"📁 Indices Using This Policy (showing 10 of {len(using_indices)})"
+                indices_title = f"📁 Indices Using This Policy (showing 15 of {len(using_indices)})"
 
             indices_panel = Panel(
                 indices_table,
-                title=title,
+                title=indices_title,
                 border_style="green",
                 padding=(1, 1)
             )
         else:
             # No indices using this policy
-            no_indices_table = Table(show_header=False, box=None)
-            no_indices_table.add_column("", justify="center")
-            no_indices_table.add_row("🚫 No indices currently using this policy")
-
-            indices_panel = Panel(
-                no_indices_table,
-                title="📁 Indices Using This Policy",
+            summary_panel = Panel(
+                Text("ℹ️  This policy is not currently being used by any indices.\n\nTo apply this policy to an index template or data stream, update your index template configuration.", 
+                     style="dim white", justify="center"),
+                title="� Policy Usage",
                 border_style="yellow",
-                padding=(1, 1)
+                padding=(2, 2)
             )
+            indices_panel = None
 
-        # Create quick actions panel
+        # Create quick actions with more relevant commands
         actions_table = Table(show_header=False, box=None, padding=(0, 1))
-        actions_table.add_column("Action", style="bold", no_wrap=True)
+        actions_table.add_column("Action", style="bold magenta", no_wrap=True)
         actions_table.add_column("Command", style="cyan")
 
-        actions_table.add_row("List all policies:", "./escmd.py ilm policies")
-        actions_table.add_row("View ILM status:", "./escmd.py ilm status")
-        actions_table.add_row("Check for errors:", "./escmd.py ilm errors")
+        actions_table.add_row("📋 All policies:", "./escmd.py ilm policies")
+        actions_table.add_row("📊 ILM status:", "./escmd.py ilm status")
+        actions_table.add_row("⚠️  Check errors:", "./escmd.py ilm errors")
+        
         if using_indices:
-            actions_table.add_row("Explain an index:", f"./escmd.py ilm explain {using_indices[0]['name']}")
-        # Add show-all option if there are more indices and we're not already showing all
-        if not show_all_indices and len(using_indices) > 10:
-            actions_table.add_row("Show all indices:", f"./escmd.py ilm policy {policy_name} --show-all")
+            # Pick a representative index from the largest phase
+            largest_phase = max(phase_stats.items(), key=lambda x: x[1])[0] if phase_stats else None
+            sample_index = next((idx for idx in using_indices if idx.get('phase') == largest_phase), using_indices[0])
+            actions_table.add_row("🔍 Explain index:", f"./escmd.py ilm explain {sample_index['name']}")
+            
+            if not show_all_indices and len(using_indices) > 15:
+                actions_table.add_row("📋 Show all indices:", f"./escmd.py ilm policy {policy_name} --show-all")
+        
+        actions_table.add_row("📄 JSON format:", f"./escmd.py ilm policy {policy_name} --format json")
 
         actions_panel = Panel(
             actions_table,
@@ -3870,16 +4391,46 @@ class ElasticsearchClient:
             padding=(1, 1)
         )
 
-        # Display all panels
+        # Display everything with improved layout
         print()
         console.print(title_panel)
         print()
-        console.print(phases_panel)
-        print()
 
-        # Create side-by-side bottom panels
-        bottom_panels = Columns([indices_panel, actions_panel], equal=True, expand=True)
-        console.print(bottom_panels)
+        # Show lifecycle flow if phases exist
+        if phase_panels:
+            console.print(flow_panel)
+            print()
+
+            # Display phase panels in a more readable layout
+            if len(phase_panels) <= 2:
+                # Show side by side for 1-2 phases
+                console.print(Columns(phase_panels, expand=True))
+            elif len(phase_panels) <= 4:
+                # Show in 2x2 grid for 3-4 phases
+                for i in range(0, len(phase_panels), 2):
+                    row_panels = phase_panels[i:i+2]
+                    console.print(Columns(row_panels, expand=True))
+                    if i + 2 < len(phase_panels):  # Add spacing between rows
+                        print()
+            else:
+                # Stack vertically for many phases
+                for panel in phase_panels:
+                    console.print(panel)
+            print()
+
+        # Show indices information
+        if using_indices:
+            console.print(summary_panel)
+            print()
+            if indices_panel:
+                console.print(indices_panel)
+                print()
+        else:
+            console.print(summary_panel)
+            print()
+
+        # Actions panel spans full width
+        console.print(actions_panel)
         print()
 
     def print_enhanced_ilm_explain(self, index_name):
@@ -4073,16 +4624,104 @@ class ElasticsearchClient:
 
         return settings_panel
 
-    def show_message_box(self, title, message, message_style="bold white", panel_style="white on blue"):
-        self.title = title
-        self.message_style = message_style
-        self.panel_style = panel_style
+    def show_message_box(self, title, message, message_style="bold white", panel_style="white", border_style=None, width=None):
+        """
+        Display a message in a formatted box using rich.
+        
+        Args:
+            title (str): The title of the message box
+            message (str): The message to display
+            message_style (str): The style for the message text
+            panel_style (str): The style for the panel background (for compatibility)
+            border_style (str): The border style/color (overrides panel_style if provided)
+            width (int): Panel width (auto-sizing if None)
+        """
+        # Handle backward compatibility: convert panel_style to border_style if needed
+        if border_style is None:
+            if panel_style in ["red", "green", "blue", "yellow", "magenta", "cyan", "white"]:
+                border_style = panel_style
+            elif panel_style == "white on blue":
+                border_style = "blue"
+            else:
+                border_style = panel_style
+        
+        message_text = Text(f"{message}", style=message_style, justify="center")
+        panel_kwargs = {
+            "title": title,
+            "border_style": border_style,
+            "padding": (1, 2)
+        }
+        
+        if width:
+            panel_kwargs["width"] = width
+        
+        panel = Panel(message_text, **panel_kwargs)
+        self.console.print("\n")
+        self.console.print(panel, markup=True)
+        self.console.print("\n")
 
-        message = Text(f"{message}", style=self.message_style, justify="center")
-        panel = Panel(message, style=self.panel_style, title=self.title, border_style="bold white")
-        self.console.print("\n")
-        self.console.print(panel)
-        self.console.print("\n")
+    def find_matching_index(self, indices_data, indice):
+        """
+        Check if a given index exists in the provided indices data.
+        
+        Args:
+            indices_data (list or str): List of dictionaries or JSON string containing index data
+            indice (str): The index name to search for
+            
+        Returns:
+            bool: True if the index is found, False otherwise
+        """
+        # Ensure indices_data is a list of dictionaries, not a JSON string
+        if isinstance(indices_data, str):
+            try:
+                indices_data = json.loads(indices_data)  # Convert JSON string to Python object
+            except json.JSONDecodeError:
+                print("Error: Provided data is not valid JSON.")
+                return False
+
+        for data in indices_data:
+            if isinstance(data, dict) and data.get("index") == indice:
+                return True
+        return False  # Return False if no match is found
+
+    def find_matching_node(self, json_data, indice, server):
+        """
+        Find the first node name in json_data where 'index' equals `indice`
+        and 'node' matches the regex `server`.
+
+        Args:
+            json_data (list): List of dictionaries.
+            indice (str): Index name to match exactly.
+            server (str): Regex pattern to match node name.
+
+        Returns:
+            str or None: Node name that matches, or None if not found.
+        """
+        import re
+        pattern_server = rf".*{server}.*"
+        pattern = re.compile(pattern_server)
+        for entry in json_data:
+            if entry.get("index") == indice and pattern.search(entry.get("node", "")):
+                return entry["node"]
+        return None
+
+    def print_json_as_table(self, json_data):
+        """
+        Prints a JSON object as a pretty table using the rich module.
+
+        Args:
+            json_data (dict): Dictionary representing JSON key-value pairs.
+        """
+        from rich.table import Table
+        table = Table(title="JSON Data", show_header=True, header_style="bold magenta")
+
+        table.add_column("Key", style="cyan", justify="left")
+        table.add_column("Value", style="green", justify="left")
+
+        for key, value in json_data.items():
+            table.add_row(str(key), str(value))
+
+        self.console.print(table)
 
     def text_progress_bar(self, percent, width=10):
         multiply_percent = int(percent)
@@ -4112,6 +4751,123 @@ class ElasticsearchClient:
         except Exception as e:
             print(f"Error freezing index {index_name}: {str(e)}")
             return False
+
+    def unfreeze_index(self, index_name):
+        """
+        Unfreeze an index to make it writable again.
+
+        Args:
+            index_name (str): The name of the index to unfreeze.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            # First check if the index exists
+            if not self.es.indices.exists(index=index_name):
+                print(f"Index {index_name} does not exist.")
+                return False
+
+            # Unfreeze the index
+            self.es.indices.unfreeze(index=index_name)
+            return True
+        except Exception as e:
+            print(f"Error unfreezing index {index_name}: {str(e)}")
+            return False
+
+    def get_snapshot_stats_fast(self, repository_name):
+        """
+        Get basic snapshot statistics from a repository (ultra-fast version for dashboard).
+        Uses minimal API calls and processing.
+        
+        Args:
+            repository_name (str): The name of the snapshot repository.
+            
+        Returns:
+            dict: Basic snapshot statistics, or None if error.
+        """
+        try:
+            # Skip repository existence check for speed - let the snapshot call handle it
+            # Get snapshots with minimal information
+            response = self.es.snapshot.get(
+                repository=repository_name, 
+                snapshot="_all",
+                verbose=False,  # Reduce response size
+                ignore_unavailable=True
+            )
+
+            if 'snapshots' not in response:
+                return {'total': 0, 'successful': 0, 'failed': 0, 'in_progress': 0, 'partial': 0}
+
+            # Fast counting - only look at state field
+            stats = {'total': 0, 'successful': 0, 'failed': 0, 'in_progress': 0, 'partial': 0}
+            
+            for snapshot in response['snapshots']:
+                stats['total'] += 1
+                state = snapshot.get('state', '').upper()
+                if state == 'SUCCESS':
+                    stats['successful'] += 1
+                elif state == 'FAILED':
+                    stats['failed'] += 1
+                elif state == 'IN_PROGRESS':
+                    stats['in_progress'] += 1
+                elif state == 'PARTIAL':
+                    stats['partial'] += 1
+
+            return stats
+
+        except Exception:
+            # Silently return empty stats on any error for dashboard speed
+            return {'total': 0, 'successful': 0, 'failed': 0, 'in_progress': 0, 'partial': 0}
+
+    def get_snapshot_stats(self, repository_name):
+        """
+        Get basic snapshot statistics from a repository (fast version for dashboard).
+        
+        Args:
+            repository_name (str): The name of the snapshot repository.
+            
+        Returns:
+            dict: Basic snapshot statistics, or None if error.
+        """
+        try:
+            # First check if the repository exists
+            try:
+                self._call_with_version_compatibility(
+                    self.es.snapshot.get_repository,
+                    primary_kwargs={'repository': repository_name},
+                    fallback_kwargs={'name': repository_name}
+                )
+            except NotFoundError:
+                return None
+            except Exception:
+                return None
+
+            # Get all snapshots from the repository (but don't process them extensively)
+            response = self.es.snapshot.get(repository=repository_name, snapshot="_all")
+
+            if 'snapshots' not in response:
+                return {'total': 0, 'successful': 0, 'failed': 0, 'in_progress': 0, 'partial': 0}
+
+            # Just count the states - no expensive processing
+            stats = {'total': 0, 'successful': 0, 'failed': 0, 'in_progress': 0, 'partial': 0}
+            
+            for snapshot in response['snapshots']:
+                stats['total'] += 1
+                state = snapshot.get('state', 'UNKNOWN').upper()
+                if state == 'SUCCESS':
+                    stats['successful'] += 1
+                elif state == 'FAILED':
+                    stats['failed'] += 1
+                elif state == 'IN_PROGRESS':
+                    stats['in_progress'] += 1
+                elif state == 'PARTIAL':
+                    stats['partial'] += 1
+
+            return stats
+
+        except Exception:
+            return None
 
     def list_snapshots(self, repository_name):
         """
@@ -4202,6 +4958,627 @@ class ElasticsearchClient:
             print(f"Error listing snapshots from repository '{repository_name}': {str(e)}")
             return []
 
+    def get_snapshot_status(self, repository_name, snapshot_name):
+        """
+        Get detailed status information for a specific snapshot.
+
+        Args:
+            repository_name (str): The name of the snapshot repository.
+            snapshot_name (str): The name of the snapshot to check status for.
+
+        Returns:
+            dict: Snapshot status information, or None if not found/error.
+        """
+        try:
+            # First check if the repository exists
+            try:
+                self._call_with_version_compatibility(
+                    self.es.snapshot.get_repository,
+                    primary_kwargs={'repository': repository_name},  # Newer API
+                    fallback_kwargs={'name': repository_name}        # Older API
+                )
+            except NotFoundError:
+                print(f"Repository '{repository_name}' does not exist.")
+                return None
+            except Exception as e:
+                print(f"Error checking repository '{repository_name}': {str(e)}")
+                return None
+
+            # Get the specific snapshot
+            try:
+                response = self.es.snapshot.get(repository=repository_name, snapshot=snapshot_name)
+            except NotFoundError:
+                return None
+            except Exception as e:
+                print(f"Error getting snapshot '{snapshot_name}': {str(e)}")
+                return None
+
+            if 'snapshots' not in response or len(response['snapshots']) == 0:
+                return None
+
+            snapshot = response['snapshots'][0]
+
+            # Get current snapshot status (for in-progress snapshots)
+            status_response = None
+            try:
+                status_response = self.es.snapshot.status(repository=repository_name, snapshot=snapshot_name)
+            except Exception:
+                # Status API might not be available or snapshot might be completed
+                pass
+
+            # Build comprehensive status information
+            status_info = {
+                'repository': repository_name,
+                'snapshot': snapshot['snapshot'],
+                'state': snapshot['state'],
+                'start_time': snapshot.get('start_time', 'N/A'),
+                'end_time': snapshot.get('end_time', 'N/A'),
+                'duration_in_millis': snapshot.get('duration_in_millis', 0),
+                'indices': snapshot.get('indices', []),
+                'include_global_state': snapshot.get('include_global_state', False),
+                'failures': snapshot.get('failures', []),
+                'metadata': snapshot.get('metadata', {}),
+                'version': snapshot.get('version', 'N/A'),
+                'version_id': snapshot.get('version_id', 'N/A'),
+                'successful_shards': snapshot.get('shards', {}).get('successful', 0),
+                'failed_shards': snapshot.get('shards', {}).get('failed', 0),
+                'total_shards': snapshot.get('shards', {}).get('total', 0)
+            }
+
+            # Add current status info if available (for in-progress snapshots)
+            if status_response and 'snapshots' in status_response:
+                current_status = status_response['snapshots'][0]
+                status_info['current_status'] = {
+                    'state': current_status.get('state', 'N/A'),
+                    'stats': current_status.get('stats', {}),
+                    'shards_stats': current_status.get('shards_stats', {}),
+                    'indices_stats': current_status.get('indices', {})
+                }
+
+            # Calculate and format duration
+            if status_info['duration_in_millis'] > 0:
+                duration_seconds = status_info['duration_in_millis'] / 1000
+                if duration_seconds >= 3600:
+                    status_info['duration'] = f"{duration_seconds/3600:.1f}h"
+                elif duration_seconds >= 60:
+                    status_info['duration'] = f"{duration_seconds/60:.1f}m"
+                else:
+                    status_info['duration'] = f"{duration_seconds:.1f}s"
+            else:
+                status_info['duration'] = 'N/A'
+
+            # Format timestamps
+            if status_info['start_time'] != 'N/A':
+                try:
+                    from datetime import datetime
+                    start_dt = datetime.fromisoformat(status_info['start_time'].replace('Z', '+00:00'))
+                    status_info['start_time_formatted'] = start_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+                except:
+                    status_info['start_time_formatted'] = status_info['start_time']
+            else:
+                status_info['start_time_formatted'] = 'N/A'
+
+            if status_info['end_time'] != 'N/A':
+                try:
+                    from datetime import datetime
+                    end_dt = datetime.fromisoformat(status_info['end_time'].replace('Z', '+00:00'))
+                    status_info['end_time_formatted'] = end_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+                except:
+                    status_info['end_time_formatted'] = status_info['end_time']
+            else:
+                status_info['end_time_formatted'] = 'N/A'
+
+            # Calculate additional metrics
+            status_info['indices_count'] = len(status_info['indices'])
+            status_info['failures_count'] = len(status_info['failures'])
+
+            return status_info
+
+        except Exception as e:
+            print(f"Error getting snapshot status for '{snapshot_name}' from repository '{repository_name}': {str(e)}")
+            return None
+
+    def display_snapshot_status(self, status_info, repository_name):
+        """
+        Display detailed snapshot status information in a formatted text box.
+
+        Args:
+            status_info (dict): Snapshot status information from get_snapshot_status()
+            repository_name (str): Name of the snapshot repository
+        """
+        from rich.panel import Panel
+        from rich.text import Text
+        from rich.table import Table
+        from rich.columns import Columns
+
+        # Determine state styling and icon
+        state = status_info.get('state', 'UNKNOWN')
+        if state == 'SUCCESS':
+            state_text = Text("✅ SUCCESS", style="bold green")
+            panel_style = "green"
+        elif state == 'IN_PROGRESS':
+            state_text = Text("⏳ IN PROGRESS", style="bold yellow")
+            panel_style = "yellow"
+        elif state == 'FAILED':
+            state_text = Text("❌ FAILED", style="bold red")
+            panel_style = "red"
+        elif state == 'PARTIAL':
+            state_text = Text("⚠️ PARTIAL", style="bold orange3")
+            panel_style = "orange3"
+        else:
+            state_text = Text(f"❓ {state}", style="bold white")
+            panel_style = "white"
+
+        # Create main status table
+        status_table = Table.grid(padding=(0, 1))
+        status_table.add_column(style="bold white", no_wrap=True)
+        status_table.add_column(style="bold cyan")
+
+        # Basic information
+        status_table.add_row("📦 Repository:", repository_name)
+        status_table.add_row("📸 Snapshot:", status_info.get('snapshot', 'N/A'))
+        status_table.add_row("🏷️  State:", state_text)
+
+        # Timing information
+        status_table.add_row("🕐 Start Time:", status_info.get('start_time_formatted', 'N/A'))
+        status_table.add_row("🕑 End Time:", status_info.get('end_time_formatted', 'N/A'))
+        status_table.add_row("⏱️  Duration:", status_info.get('duration', 'N/A'))
+
+        # Version information
+        if status_info.get('version') != 'N/A':
+            status_table.add_row("🔖 ES Version:", status_info.get('version', 'N/A'))
+
+        # Global state
+        global_state = "✅ Yes" if status_info.get('include_global_state') else "❌ No"
+        status_table.add_row("🌐 Global State:", global_state)
+
+        # Create statistics table
+        stats_table = Table.grid(padding=(0, 1))
+        stats_table.add_column(style="bold white", no_wrap=True)
+        stats_table.add_column(style="bold cyan")
+
+        stats_table.add_row("📊 Total Indices:", str(status_info.get('indices_count', 0)))
+        stats_table.add_row("✅ Total Shards:", str(status_info.get('total_shards', 0)))
+        stats_table.add_row("🎯 Successful Shards:", str(status_info.get('successful_shards', 0)))
+
+        failed_shards = status_info.get('failed_shards', 0)
+        failed_style = "bold red" if failed_shards > 0 else "bold green"
+        stats_table.add_row("❌ Failed Shards:", Text(str(failed_shards), style=failed_style))
+
+        failures_count = status_info.get('failures_count', 0)
+        failures_style = "bold red" if failures_count > 0 else "bold green"
+        stats_table.add_row("⚠️  Failures:", Text(str(failures_count), style=failures_style))
+
+        # Create panels
+        main_panel = Panel(
+            status_table,
+            title="[bold cyan]📸 Snapshot Information[/bold cyan]",
+            border_style=panel_style,
+            padding=(1, 2)
+        )
+
+        stats_panel = Panel(
+            stats_table,
+            title="[bold cyan]📊 Statistics[/bold cyan]",
+            border_style=panel_style,
+            padding=(1, 2)
+        )
+
+        # Display main panels side by side
+        print()
+        columns = Columns([main_panel, stats_panel], equal=True, expand=True)
+        print(columns)
+
+        # Show current status for in-progress snapshots
+        if state == 'IN_PROGRESS' and 'current_status' in status_info:
+            current = status_info['current_status']
+
+            progress_table = Table.grid(padding=(0, 1))
+            progress_table.add_column(style="bold white", no_wrap=True)
+            progress_table.add_column(style="bold yellow")
+
+            # Show current statistics if available
+            shards_stats = current.get('shards_stats', {})
+            if shards_stats:
+                progress_table.add_row("⏳ Current State:", current.get('state', 'N/A'))
+                progress_table.add_row("📊 Total Shards:", str(shards_stats.get('total', 0)))
+                progress_table.add_row("✅ Started:", str(shards_stats.get('started', 0)))
+                progress_table.add_row("🎯 Finalizing:", str(shards_stats.get('finalizing', 0)))
+                progress_table.add_row("✅ Done:", str(shards_stats.get('done', 0)))
+                progress_table.add_row("❌ Failed:", str(shards_stats.get('failed', 0)))
+
+            progress_panel = Panel(
+                progress_table,
+                title="[bold yellow]⏳ Current Progress[/bold yellow]",
+                border_style="yellow",
+                padding=(1, 2)
+            )
+            print(progress_panel)
+
+        # Show indices list if not too many
+        indices = status_info.get('indices', [])
+        if indices:
+            if len(indices) <= 10:
+                indices_text = Text("\n".join(f"• {idx}" for idx in indices))
+            else:
+                indices_text = Text(f"Total: {len(indices)} indices\n")
+                indices_text.append("First 10:\n", style="dim")
+                indices_text.append("\n".join(f"• {idx}" for idx in indices[:10]))
+                indices_text.append(f"\n... and {len(indices) - 10} more", style="dim")
+
+            indices_panel = Panel(
+                indices_text,
+                title="[bold cyan]🗂️  Included Indices[/bold cyan]",
+                border_style=panel_style,
+                padding=(1, 2)
+            )
+            print(indices_panel)
+
+        # Show failures if any
+        failures = status_info.get('failures', [])
+        if failures:
+            failures_text = Text()
+            for i, failure in enumerate(failures):
+                if i > 0:
+                    failures_text.append("\n")
+                failures_text.append(f"• Index: {failure.get('index', 'Unknown')}\n", style="bold white")
+                failures_text.append(f"  Shard: {failure.get('shard_id', 'Unknown')}\n", style="white")
+                failures_text.append(f"  Reason: {failure.get('reason', 'No details')}\n", style="red")
+
+            failures_panel = Panel(
+                failures_text,
+                title="[bold red]❌ Failures Details[/bold red]",
+                border_style="red",
+                padding=(1, 2)
+            )
+            print(failures_panel)
+
+        print()
+
+    def get_matching_indices(self, pattern):
+        """
+        Get all indices matching regex pattern with their current ILM status.
+
+        Args:
+            pattern (str): Regex pattern to match index names
+
+        Returns:
+            list: List of matching index dictionaries with current ILM status
+        """
+        import re
+        from elasticsearch.exceptions import NotFoundError
+
+        try:
+            # Get all indices
+            indices_response = self.es.cat.indices(format='json', h='index,health,status')
+
+            # Compile regex pattern
+            compiled_pattern = re.compile(pattern, re.IGNORECASE)
+
+            matching_indices = []
+            for index_info in indices_response:
+                index_name = index_info['index']
+                if compiled_pattern.search(index_name):
+                    # Get current ILM status for this index
+                    current_policy = None
+                    try:
+                        ilm_response = self.es.ilm.explain_lifecycle(index=index_name)
+                        if 'indices' in ilm_response and index_name in ilm_response['indices']:
+                            current_policy = ilm_response['indices'][index_name].get('policy')
+                    except (NotFoundError, Exception):
+                        # Index might not have ILM or API might not be available
+                        current_policy = None
+
+                    matching_indices.append({
+                        'name': index_name,
+                        'current_policy': current_policy,
+                        'health': index_info.get('health', 'unknown'),
+                        'status': index_info.get('status', 'unknown')
+                    })
+
+            return matching_indices
+
+        except Exception as e:
+            print(f"Error getting matching indices for pattern '{pattern}': {str(e)}")
+            return []
+
+    def validate_ilm_policy_exists(self, policy_name):
+        """
+        Validate that an ILM policy exists.
+
+        Args:
+            policy_name (str): Name of the ILM policy to validate
+
+        Returns:
+            bool: True if policy exists, False otherwise
+        """
+        try:
+            self.es.ilm.get_lifecycle(policy=policy_name)
+            return True
+        except Exception:
+            return False
+
+    def remove_ilm_policy_from_indices(self, indices, dry_run=False, max_concurrent=5, continue_on_error=False):
+        """
+        Remove ILM policy from multiple indices with concurrent processing.
+
+        Args:
+            indices (list): List of index dictionaries
+            dry_run (bool): If True, only simulate the operation
+            max_concurrent (int): Maximum number of concurrent operations
+            continue_on_error (bool): Whether to continue on individual failures
+
+        Returns:
+            dict: Results with successful, failed, and skipped operations
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from rich.progress import Progress, TaskID
+        import time
+
+        results = {
+            'successful': [],
+            'failed': [],
+            'skipped': [],
+            'total_processed': 0,
+            'start_time': time.time()
+        }
+
+        def remove_policy_single(index_info):
+            index_name = index_info['name']
+
+            if not index_info['current_policy']:
+                return {'index': index_name, 'status': 'skipped', 'reason': 'No ILM policy assigned'}
+
+            if dry_run:
+                return {'index': index_name, 'status': 'would_remove', 'policy': index_info['current_policy']}
+
+            try:
+                # Remove ILM policy
+                self.es.ilm.remove_policy(index=index_name)
+                return {'index': index_name, 'status': 'success', 'removed_policy': index_info['current_policy']}
+            except Exception as e:
+                return {'index': index_name, 'status': 'failed', 'error': str(e), 'policy': index_info['current_policy']}
+
+        # Process with progress tracking
+        with Progress() as progress:
+            operation_name = "Simulating policy removal..." if dry_run else "Removing ILM policies..."
+            task = progress.add_task(operation_name, total=len(indices))
+
+            with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+                futures = {executor.submit(remove_policy_single, idx): idx for idx in indices}
+
+                for future in as_completed(futures):
+                    result = future.result()
+                    results['total_processed'] += 1
+
+                    if result['status'] in ['success', 'would_remove']:
+                        results['successful'].append(result)
+                    elif result['status'] == 'failed':
+                        results['failed'].append(result)
+                        if not continue_on_error and not dry_run:
+                            # Cancel remaining operations
+                            for remaining_future in futures:
+                                remaining_future.cancel()
+                            break
+                    else:
+                        results['skipped'].append(result)
+
+                    progress.advance(task)
+
+        results['end_time'] = time.time()
+        results['duration'] = results['end_time'] - results['start_time']
+        return results
+
+    def set_ilm_policy_for_indices(self, indices, policy_name, dry_run=False, max_concurrent=5, continue_on_error=False):
+        """
+        Set ILM policy for multiple indices with concurrent processing.
+
+        Args:
+            indices (list): List of index dictionaries
+            policy_name (str): Name of the ILM policy to set
+            dry_run (bool): If True, only simulate the operation
+            max_concurrent (int): Maximum number of concurrent operations
+            continue_on_error (bool): Whether to continue on individual failures
+
+        Returns:
+            dict: Results with successful, failed, and skipped operations
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from rich.progress import Progress, TaskID
+        import time
+
+        results = {
+            'successful': [],
+            'failed': [],
+            'skipped': [],
+            'total_processed': 0,
+            'start_time': time.time()
+        }
+
+        def set_policy_single(index_info):
+            index_name = index_info['name']
+            current_policy = index_info['current_policy']
+
+            if current_policy == policy_name:
+                return {'index': index_name, 'status': 'skipped', 'reason': f'Already has policy {policy_name}'}
+
+            if dry_run:
+                return {
+                    'index': index_name,
+                    'status': 'would_set',
+                    'new_policy': policy_name,
+                    'current_policy': current_policy
+                }
+
+            try:
+                # Set ILM policy using index settings API
+                self.es.indices.put_settings(
+                    index=index_name,
+                    body={
+                        "index.lifecycle.name": policy_name
+                    }
+                )
+                return {
+                    'index': index_name,
+                    'status': 'success',
+                    'new_policy': policy_name,
+                    'previous_policy': current_policy
+                }
+            except Exception as e:
+                return {
+                    'index': index_name,
+                    'status': 'failed',
+                    'error': str(e),
+                    'target_policy': policy_name,
+                    'current_policy': current_policy
+                }
+
+        # Process with progress tracking
+        with Progress() as progress:
+            operation_name = f"Simulating policy assignment ({policy_name})..." if dry_run else f"Setting ILM policy ({policy_name})..."
+            task = progress.add_task(operation_name, total=len(indices))
+
+            with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+                futures = {executor.submit(set_policy_single, idx): idx for idx in indices}
+
+                for future in as_completed(futures):
+                    result = future.result()
+                    results['total_processed'] += 1
+
+                    if result['status'] in ['success', 'would_set']:
+                        results['successful'].append(result)
+                    elif result['status'] == 'failed':
+                        results['failed'].append(result)
+                        if not continue_on_error and not dry_run:
+                            # Cancel remaining operations
+                            for remaining_future in futures:
+                                remaining_future.cancel()
+                            break
+                    else:
+                        results['skipped'].append(result)
+
+                    progress.advance(task)
+
+        results['end_time'] = time.time()
+        results['duration'] = results['end_time'] - results['start_time']
+        return results
+
+    def display_ilm_bulk_operation_results(self, results, operation_type):
+        """
+        Display results of bulk ILM operations in formatted panels.
+
+        Args:
+            results (dict): Results from bulk ILM operation
+            operation_type (str): Type of operation performed
+        """
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+        from rich.columns import Columns
+
+        # Determine if this was a dry run
+        is_dry_run = any(item.get('status', '').startswith('would_') for item in results['successful'])
+
+        # Create summary statistics
+        total = results['total_processed']
+        successful = len(results['successful'])
+        failed = len(results['failed'])
+        skipped = len(results['skipped'])
+        duration = results.get('duration', 0)
+
+        # Create summary table
+        summary_table = Table.grid(padding=(0, 1))
+        summary_table.add_column(style="bold white", no_wrap=True)
+        summary_table.add_column(style="bold cyan")
+
+        operation_display = f"🔍 {operation_type} (DRY RUN)" if is_dry_run else f"✅ {operation_type}"
+        summary_table.add_row("🚀 Operation:", operation_display)
+        summary_table.add_row("📊 Total Processed:", str(total))
+        summary_table.add_row("✅ Successful:", str(successful))
+        summary_table.add_row("❌ Failed:", str(failed))
+        summary_table.add_row("⏭️  Skipped:", str(skipped))
+        summary_table.add_row("⏱️  Duration:", f"{duration:.2f}s")
+
+        # Create results details table if there are results to show
+        details_table = Table(show_header=True, header_style="bold magenta")
+        details_table.add_column("Index", style="cyan", no_wrap=True)
+        details_table.add_column("Status", style="green")
+        details_table.add_column("Details", style="yellow")
+
+        # Add successful operations (first 10)
+        for item in results['successful'][:10]:
+            status_icon = "🔍" if item['status'].startswith('would_') else "✅"
+            status_text = f"{status_icon} {item['status'].replace('_', ' ').title()}"
+
+            details = ""
+            if 'removed_policy' in item:
+                details = f"Removed: {item['removed_policy']}"
+            elif 'new_policy' in item:
+                details = f"Set: {item['new_policy']}"
+                if item.get('previous_policy'):
+                    details += f" (was: {item['previous_policy']})"
+            elif 'policy' in item:
+                details = f"Would remove: {item['policy']}"
+
+            details_table.add_row(item['index'], status_text, details)
+
+        # Add failed operations
+        for item in results['failed']:
+            details_table.add_row(
+                item['index'],
+                "❌ Failed",
+                item.get('error', 'Unknown error')[:50] + "..." if len(item.get('error', '')) > 50 else item.get('error', 'Unknown error')
+            )
+
+        # Add some skipped operations
+        for item in results['skipped'][:5]:
+            details_table.add_row(item['index'], "⏭️  Skipped", item.get('reason', 'Unknown reason'))
+
+        # Show indication if there are more results
+        total_shown = min(10, len(results['successful'])) + len(results['failed']) + min(5, len(results['skipped']))
+        total_available = len(results['successful']) + len(results['failed']) + len(results['skipped'])
+
+        if total_shown < total_available:
+            details_table.add_row("...", f"[dim]({total_available - total_shown} more entries)[/dim]", "...")
+
+        # Create panels
+        summary_panel = Panel(
+            summary_table,
+            title="[bold cyan]📊 Operation Summary[/bold cyan]",
+            border_style="green" if failed == 0 else "yellow" if failed < successful else "red",
+            padding=(1, 2)
+        )
+
+        details_panel = Panel(
+            details_table,
+            title="[bold cyan]📋 Operation Details[/bold cyan]",
+            border_style="cyan",
+            padding=(1, 2)
+        )
+
+        # Display results
+        print()
+        print(summary_panel)
+
+        if total_available > 0:
+            print(details_panel)
+
+        # Show warnings or errors
+        if failed > 0 and not is_dry_run:
+            warning_text = Text()
+            warning_text.append("⚠️  Some operations failed. ", style="bold yellow")
+            warning_text.append("Use --continue-on-error to process all indices even when some fail.", style="dim")
+
+            warning_panel = Panel(
+                warning_text,
+                title="[bold yellow]⚠️  Warning[/bold yellow]",
+                border_style="yellow",
+                padding=(1, 2)
+            )
+            print(warning_panel)
+
+        print()
+
     def print_stylish_health_dashboard(self, health_data):
         """
         Display cluster health in a stylish dashboard format with panels and visual elements.
@@ -4249,15 +5626,22 @@ class ElasticsearchClient:
 
         # Create the main title with cluster name and status
         cluster_name = health_data.get('cluster_name', 'Unknown')
+        cluster_version = health_data.get('cluster_version', 'Unknown')
+        
         title_text = Text()
         title_text.append("🔍 ", style="bold cyan")
         title_text.append("Elasticsearch Cluster Health", style="bold white")
 
-        # Status header with large status indicator
+        # Status header with large status indicator and version
         status_header = Text()
         status_header.append(f"{status_icon} ", style=f"bold {status_color}")
         status_header.append(f"Cluster: ", style="bold white")
         status_header.append(f"{cluster_name}", style=f"bold {theme_color}")
+        
+        # Add version information if available
+        if cluster_version != 'Unknown':
+            status_header.append(f" (v{cluster_version})", style=f"bold cyan")
+            
         status_header.append(f" • Status: ", style="bold white")
         status_header.append(f"{status.upper()}", style=f"bold {status_color}")
 
@@ -4313,6 +5697,266 @@ class ElasticsearchClient:
         console.print(grid)
         console.print()
 
+    def print_multi_cluster_health_comparison(self, config_file, group_name, output_format='table'):
+        """
+        Display health comparison for all clusters in a group.
+        
+        Args:
+            config_file (str): Path to configuration file
+            group_name (str): Name of cluster group to display
+            output_format (str): Output format - 'table' or 'json'
+        """
+        try:
+            from rich.console import Console
+            from rich.table import Table
+            from rich.panel import Panel
+            
+            console = Console()
+            
+            # Load configuration to get group members
+            from configuration_manager import ConfigurationManager
+            import os
+            
+            # Get the state file path (same as in escmd.py)
+            script_directory = os.path.dirname(config_file)
+            state_file = os.path.join(script_directory, 'escmd.json')
+            
+            config_manager = ConfigurationManager(config_file, state_file)
+            all_config = config_manager.config
+            cluster_groups = all_config.get('cluster_groups', {})
+            
+            if group_name not in cluster_groups:
+                print(f"❌ Group '{group_name}' not found in configuration.")
+                return
+            
+            group_members = cluster_groups[group_name]
+            if not group_members:
+                print(f"❌ Group '{group_name}' has no members.")
+                return
+            
+            # Collect health data for all clusters
+            clusters_health_data = []
+            
+            if output_format == 'table':
+                print(f"\n🔍 Checking health for {len(group_members)} clusters in group '{group_name}'...\n")
+            
+            for cluster_name in group_members:
+                cluster_data = {
+                    'cluster_name': cluster_name,
+                    'status': 'ERROR',
+                    'version': 'N/A',
+                    'nodes': 0,
+                    'data_nodes': 0,
+                    'primary_shards': 0,
+                    'active_shards': 0,
+                    'unassigned_shards': 0,
+                    'shard_health_percent': 0.0,
+                    'error': None
+                }
+                
+                try:
+                    # Get cluster configuration directly
+                    cluster_config = config_manager.get_server_config_by_location(cluster_name)
+                    
+                    if not cluster_config:
+                        cluster_data.update({
+                            'status': 'NOT_FOUND',
+                            'error': 'Configuration not found'
+                        })
+                        clusters_health_data.append(cluster_data)
+                        continue
+                    
+                    # Create ES client for this cluster
+                    temp_client = ElasticsearchClient(
+                        host1=cluster_config['elastic_host'],
+                        host2=cluster_config.get('elastic_host2', cluster_config['elastic_host']),
+                        port=cluster_config['elastic_port'],
+                        use_ssl=cluster_config.get('use_ssl', False),
+                        verify_certs=cluster_config.get('verify_certs', False),
+                        elastic_username=cluster_config.get('elastic_username'),
+                        elastic_password=cluster_config.get('elastic_password'),
+                        elastic_authentication=cluster_config.get('elastic_authentication', False)
+                    )
+                    
+                    # Test connection first
+                    if not temp_client.ping():
+                        cluster_data.update({
+                            'status': 'OFFLINE',
+                            'error': 'Connection failed'
+                        })
+                        clusters_health_data.append(cluster_data)
+                        continue
+                    
+                    # Get health data
+                    health_data = temp_client.get_cluster_health()
+                    
+                    # Extract and format the data
+                    display_name = health_data.get('cluster_name', cluster_name)
+                    status = health_data.get('cluster_status', 'unknown').upper()
+                    
+                    # Format version
+                    version = health_data.get('cluster_version', 'Unknown')
+                    if isinstance(version, dict):
+                        version = version.get('number', 'Unknown')
+                    
+                    # Update cluster data with real values
+                    cluster_data.update({
+                        'cluster_name': display_name,
+                        'status': status,
+                        'version': version,
+                        'nodes': health_data.get('number_of_nodes', 0),
+                        'data_nodes': health_data.get('number_of_data_nodes', 0),
+                        'primary_shards': health_data.get('active_primary_shards', 0),
+                        'active_shards': health_data.get('active_shards', 0),
+                        'unassigned_shards': health_data.get('unassigned_shards', 0),
+                        'shard_health_percent': health_data.get('active_shards_percent', 100.0),
+                        'error': None
+                    })
+                    
+                except Exception as e:
+                    cluster_data.update({
+                        'status': 'ERROR',
+                        'error': str(e)
+                    })
+                
+                clusters_health_data.append(cluster_data)
+            
+            # Output the data in the requested format
+            if output_format == 'json':
+                # JSON output
+                json_output = {
+                    'group_name': group_name,
+                    'cluster_count': len(group_members),
+                    'clusters': clusters_health_data
+                }
+                self.pretty_print_json(json_output)
+            else:
+                # Table output (default)
+                # Create table for group health comparison
+                table = Table(title=f"🏥 Health Status for Group: {group_name.upper()}")
+                table.add_column("Cluster", style="bold cyan", no_wrap=True)
+                table.add_column("Status", justify="center")
+                table.add_column("Version", style="dim", no_wrap=True)
+                table.add_column("Nodes", justify="right")
+                table.add_column("Data Nodes", justify="right") 
+                table.add_column("Primary", justify="right")
+                table.add_column("Total Shards", justify="right")
+                table.add_column("Unassigned", justify="right")
+                table.add_column("Health %", justify="right")
+                
+                for cluster_data in clusters_health_data:
+                    if cluster_data['status'] in ['NOT_FOUND', 'OFFLINE', 'ERROR']:
+                        status_display = {
+                            'NOT_FOUND': "❌ NOT FOUND",
+                            'OFFLINE': "🔴 OFFLINE", 
+                            'ERROR': "❌ ERROR"
+                        }.get(cluster_data['status'], "❌ ERROR")
+                        
+                        table.add_row(
+                            cluster_data['cluster_name'],
+                            status_display,
+                            "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
+                        )
+                    else:
+                        status = cluster_data['status']
+                        status_icon = "🟢" if status == 'GREEN' else "🟡" if status == 'YELLOW' else "🔴" if status == 'RED' else "⚪"
+                        
+                        version = cluster_data['version']
+                        if version != 'Unknown' and not str(version).startswith('v'):
+                            version = f"v{version}"
+                        
+                        table.add_row(
+                            cluster_data['cluster_name'],
+                            f"{status_icon} {status}",
+                            version,
+                            str(cluster_data['nodes']),
+                            str(cluster_data['data_nodes']),
+                            f"{cluster_data['primary_shards']:,}",
+                            f"{cluster_data['active_shards']:,}",
+                            str(cluster_data['unassigned_shards']),
+                            f"{cluster_data['shard_health_percent']:.1f}%"
+                        )
+                
+                console.print(table)
+                print()
+            
+        except Exception as e:
+            print(f"❌ Error displaying group health: {str(e)}")
+
+    def print_cluster_health_comparison(self, config_file, cluster1, cluster2):
+        """
+        Display side-by-side health comparison between two clusters.
+        
+        Args:
+            config_file (str): Path to configuration file
+            cluster1 (str): First cluster name
+            cluster2 (str): Second cluster name
+        """
+        try:
+            from rich.console import Console
+            from rich.table import Table
+            from rich.columns import Columns
+            
+            console = Console()
+            
+            print(f"\n🔍 Comparing health between '{cluster1}' and '{cluster2}'...\n")
+            
+            # Create comparison table
+            table = Table(title=f"🏥 Health Comparison: {cluster1} vs {cluster2}")
+            table.add_column("Metric", style="bold white", no_wrap=True)
+            table.add_column(cluster1, style="bold cyan")
+            table.add_column(cluster2, style="bold magenta")
+            
+            try:
+                # Get health for current cluster (cluster1)
+                health1 = self.get_cluster_health()
+                
+                # Get health for comparison cluster (cluster2)
+                from configuration_manager import ConfigurationManager
+                import os
+                
+                # Get the state file path (same as in escmd.py)
+                script_directory = os.path.dirname(config_file)
+                state_file = os.path.join(script_directory, 'escmd.json')
+                
+                config_manager = ConfigurationManager(config_file, state_file)
+                cluster2_config = config_manager.get_server_config_by_location(cluster2)
+                
+                temp_client = ElasticsearchClient(
+                    cluster2_config['elastic_host'],
+                    cluster2_config['elastic_port'],
+                    use_ssl=cluster2_config.get('use_ssl', False),
+                    verify_certs=cluster2_config.get('verify_certs', False),
+                    elastic_username=cluster2_config.get('elastic_username'),
+                    elastic_password=cluster2_config.get('elastic_password'),
+                    elastic_authentication=cluster2_config.get('elastic_authentication', False)
+                )
+                
+                health2 = temp_client.get_cluster_health()
+                
+                # Add comparison rows
+                status1 = health1.get('cluster_status', 'unknown').upper()
+                status2 = health2.get('cluster_status', 'unknown').upper()
+                icon1 = "🟢" if status1 == 'GREEN' else "🟡" if status1 == 'YELLOW' else "🔴"
+                icon2 = "🟢" if status2 == 'GREEN' else "🟡" if status2 == 'YELLOW' else "🔴"
+                
+                table.add_row("Status", f"{icon1} {status1}", f"{icon2} {status2}")
+                table.add_row("Total Nodes", str(health1.get('number_of_nodes', 0)), str(health2.get('number_of_nodes', 0)))
+                table.add_row("Data Nodes", str(health1.get('number_of_data_nodes', 0)), str(health2.get('number_of_data_nodes', 0)))
+                table.add_row("Active Shards", f"{health1.get('active_shards', 0):,}", f"{health2.get('active_shards', 0):,}")
+                table.add_row("Primary Shards", f"{health1.get('active_primary_shards', 0):,}", f"{health2.get('active_primary_shards', 0):,}")
+                table.add_row("Unassigned", str(health1.get('unassigned_shards', 0)), str(health2.get('unassigned_shards', 0)))
+                table.add_row("Pending Tasks", str(health1.get('number_of_pending_tasks', 0)), str(health2.get('number_of_pending_tasks', 0)))
+                
+                console.print(table)
+                print()
+                
+            except Exception as e:
+                print(f"❌ Error getting health data for comparison: {str(e)}")
+                
+        except Exception as e:
+            print(f"❌ Error displaying cluster comparison: {str(e)}")
+
     def _create_cluster_overview_panel(self, health_data, theme_color):
         """Create cluster overview panel with key metrics."""
         from rich.table import Table
@@ -4324,6 +5968,19 @@ class ElasticsearchClient:
 
         # Add cluster info rows
         table.add_row("🏢 Cluster Name:", health_data.get('cluster_name', 'Unknown'))
+        
+        # Add version information if available
+        cluster_version = health_data.get('cluster_version', 'Unknown')
+        build_hash = health_data.get('build_hash')
+        if cluster_version != 'Unknown':
+            version_text = f"v{cluster_version}"
+            if build_hash:
+                version_text += f" (build: {build_hash})"
+            table.add_row("🔧 ES Version:", version_text)
+            
+            # Add mixed version warning if applicable
+            if health_data.get('mixed_versions', False):
+                table.add_row("⚠️  Version:", "Mixed versions detected!")
 
         # Get current master node - use pre-gathered data
         master_node = health_data.get('_master_node', 'Unknown')
@@ -4648,6 +6305,16 @@ class ElasticsearchClient:
             # Add health metrics
             cluster_status = health_data.get('cluster_status', health_data.get('status', 'unknown')).upper()
             table.add_row("📊 Status:", cluster_status)
+
+            # Add master node information if available
+            master_node = health_data.get('_master_node', 'Unknown')
+            if master_node != 'Unknown':
+                # Remove "-master" suffix from the display name
+                display_name = master_node[:-7] if master_node.endswith('-master') else master_node
+                table.add_row("👑 Master Node:", display_name)
+            else:
+                table.add_row("👑 Master Node:", "Unknown")
+
             table.add_row("🖥️  Nodes:", str(health_data.get('number_of_nodes', 0)))
             table.add_row("💾 Data Nodes:", str(health_data.get('number_of_data_nodes', 0)))
             table.add_row("🟢 Active Shards:", f"{health_data.get('active_shards', 0):,}")
@@ -4694,16 +6361,27 @@ class ElasticsearchClient:
             table.add_row("❌ Failed:", "N/A", Text("", style=""))
             table.add_row("🎯 Status:", "NOT CONFIGURED", Text("⚠️", style="bold yellow"))
         else:
-            # Use pre-gathered snapshot information (snapshots should be a list)
-            if snapshots is None:
-                snapshots = []
+            # Check if we have stats dict (fast method) or list of snapshots (old method)
+            if isinstance(snapshots, dict) and 'total' in snapshots:
+                # New fast stats format
+                stats = snapshots
+                total_snapshots = stats.get('total', 0)
+                successful = stats.get('successful', 0)
+                failed = stats.get('failed', 0)
+                in_progress = stats.get('in_progress', 0)
+                partial = stats.get('partial', 0)
+            else:
+                # Old format - list of snapshots or empty list
+                if snapshots is None:
+                    snapshots = []
 
-            total_snapshots = len(snapshots)
-
-            # Count successful and failed snapshots
-            successful = sum(1 for s in snapshots if s.get('state') == 'SUCCESS')
-            failed = sum(1 for s in snapshots if s.get('state') == 'FAILED')
-            in_progress = sum(1 for s in snapshots if s.get('state') == 'IN_PROGRESS')
+                total_snapshots = len(snapshots)
+                
+                # Count successful and failed snapshots
+                successful = sum(1 for s in snapshots if s.get('state') == 'SUCCESS')
+                failed = sum(1 for s in snapshots if s.get('state') == 'FAILED')
+                in_progress = sum(1 for s in snapshots if s.get('state') == 'IN_PROGRESS')
+                partial = sum(1 for s in snapshots if s.get('state') == 'PARTIAL')
 
             # Repository status
             table.add_row("📦 Repository:", snapshot_repo, Text("✅", style="bold green"))
@@ -4732,6 +6410,10 @@ class ElasticsearchClient:
             # In progress snapshots
             if in_progress > 0:
                 table.add_row("⏳ In Progress:", str(in_progress), Text("⚡", style="bold orange"))
+                
+            # Partial snapshots
+            if partial > 0:
+                table.add_row("⚠️ Partial:", str(partial), Text("⚠️", style="bold yellow"))
 
             # Overall status
             if failed > 0:
@@ -5116,7 +6798,7 @@ class ElasticsearchClient:
                     break
 
             if not index_info:
-                console.print(f"[red]❌ Index '{indice_name}' not found[/red]")
+                self.show_message_box("❌ Index Not Found", f"Index '{indice_name}' not found", message_style="bold white", panel_style="red")
                 return
 
             # Get index settings
@@ -5239,7 +6921,7 @@ class ElasticsearchClient:
                 padding=(1, 2)
             )
 
-            # Shards Distribution Panel
+            # Shards Distribution Panel - Create 3 separate tables
             shard_states = {}
             shard_types = {'primary': 0, 'replica': 0}
             nodes_distribution = {}
@@ -5259,36 +6941,52 @@ class ElasticsearchClient:
                 node = shard.get('node', 'unassigned')
                 nodes_distribution[node] = nodes_distribution.get(node, 0) + 1
 
-            # Format shard states
-            states_text = ""
+            # Create Shard Totals Table
+            totals_table = Table.grid(padding=(0, 3))
+            totals_table.add_column(style="bold cyan", min_width=16)
+            totals_table.add_column(style="white")
+            totals_table.add_row("Total Shards:", f"📊 {len(index_shards)}")
+            totals_table.add_row("Primary:", f"🔑 {shard_types['primary']}")
+            totals_table.add_row("Replica:", f"📋 {shard_types['replica']}")
+
+            totals_panel = Panel(
+                totals_table,
+                title="📊 Shard Totals",
+                border_style=theme_color,
+                padding=(1, 1)
+            )
+
+            # Create States Table
+            states_table = Table.grid(padding=(0, 3))
+            states_table.add_column(style="bold cyan", min_width=16)
+            states_table.add_column(style="white")
             for state, count in shard_states.items():
                 icon = "✅" if state == "STARTED" else "🔄" if state == "INITIALIZING" else "❌"
-                states_text += f"[bold]{state}:[/bold] {icon} {count}\n"
+                states_table.add_row(f"{state}:", f"{icon} {count}")
 
-            # Format top nodes
+            states_panel = Panel(
+                states_table,
+                title="🔄 Shard States",
+                border_style=theme_color,
+                padding=(1, 1)
+            )
+
+            # Create Nodes Table
+            nodes_table = Table.grid(padding=(0, 3))
+            nodes_table.add_column(style="bold cyan", min_width=16)
+            nodes_table.add_column(style="white")
             top_nodes = sorted(nodes_distribution.items(), key=lambda x: x[1], reverse=True)[:5]
-            nodes_text = ""
             for node, count in top_nodes:
                 if node != 'unassigned':
-                    nodes_text += f"[bold]{node}:[/bold] 🖥️  {count}\n"
+                    nodes_table.add_row(f"{node}:", f"🖥️  {count}")
                 else:
-                    nodes_text += f"[bold]Unassigned:[/bold] ❌ {count}\n"
+                    nodes_table.add_row("None:", f"�️  {count}")
 
-            shards_content = f"""[bold]Total Shards:[/bold] 📊 {len(index_shards)}
-[bold]Primary:[/bold] 🔑 {shard_types['primary']}
-[bold]Replica:[/bold] 📋 {shard_types['replica']}
-
-[bold cyan]States:[/bold cyan]
-{states_text.rstrip()}
-
-[bold cyan]Top Nodes:[/bold cyan]
-{nodes_text.rstrip()}"""
-
-            shards_panel = Panel(
-                shards_content,
-                title="🔄 Shards Distribution",
+            nodes_panel = Panel(
+                nodes_table,
+                title="�️ Node Distribution",
                 border_style=theme_color,
-                padding=(1, 2)
+                padding=(1, 1)
             )
 
             # Create detailed shards table
@@ -5358,13 +7056,920 @@ class ElasticsearchClient:
             console.print(top_panels)
             print()
 
-            # Shards distribution gets its own row
-            console.print(shards_panel)
+            # Shards distribution in three columns
+            shards_distribution_panels = Columns([totals_panel, states_panel, nodes_panel], expand=True)
+            console.print(shards_distribution_panels)
             print()
 
             console.print(shards_table)
 
         except Exception as e:
             console.print(f"[red]❌ Error retrieving index details: {str(e)}[/red]")
+
+    def check_ilm_errors(self):
+        """
+        Check for ILM errors by calling the ILM explain API and looking for STEP = error.
+        Returns a list of indices with ILM errors.
+        """
+        import requests
+        from requests.auth import HTTPBasicAuth
+
+        try:
+            ES_URL = self.build_es_url()
+            if ES_URL is None:
+                return []
+
+            # Call ILM explain API with filter to get detailed error information
+            explain_url = f'{ES_URL}/_all/_ilm/explain?pretty&filter_path=indices.*,indices.*.policy,indices.*.step,indices.*.step_info,indices.*.failed_step,indices.*.phase,indices.*.action,indices.*.step_time,indices.*.is_auto_retryable_error,indices.*.failed_step_retry_count'
+
+            if self.elastic_authentication == True:
+                response = requests.get(
+                    explain_url,
+                    auth=HTTPBasicAuth(self.elastic_username, self.elastic_password),
+                    verify=False,
+                    timeout=self.timeout
+                )
+            else:
+                response = requests.get(explain_url, verify=False, timeout=self.timeout)
+
+            response.raise_for_status()
+
+            data = response.json()
+            error_indices = []
+            no_policy_indices = []
+            managed_indices_count = 0
+
+            if 'indices' in data:
+                for index_name, index_data in data['indices'].items():
+                    # Check if index has any ILM policy
+                    if not index_data.get('policy') or index_data.get('policy') == '':
+                        no_policy_indices.append({
+                            'index': index_name,
+                            'reason': 'No ILM policy attached'
+                        })
+                    elif 'step' in index_data and index_data['step'] == 'ERROR':
+                        # Index has policy but is in error state
+                        error_info = {
+                            'index': index_name,
+                            'policy': index_data.get('policy', 'Unknown'),
+                            'step': index_data.get('step'),
+                            'phase': index_data.get('phase', 'Unknown'),
+                            'action': index_data.get('action', 'Unknown'),
+                            'step_time': index_data.get('step_time', 'Unknown'),
+                            'failed_step': index_data.get('failed_step', 'Unknown'),
+                            'step_info': index_data.get('step_info', {}),
+                            'phase_time': index_data.get('phase_time', 'Unknown'),
+                            'action_time': index_data.get('action_time', 'Unknown'),
+                            'step_time_millis': index_data.get('step_time_millis', 'Unknown'),
+                            'is_auto_retryable_error': index_data.get('is_auto_retryable_error', False),
+                            'failed_step_retry_count': index_data.get('failed_step_retry_count', 0)
+                        }
+                        error_indices.append(error_info)
+                    else:
+                        # Index has policy and is working correctly
+                        managed_indices_count += 1
+
+            # Return comprehensive ILM status
+            return {
+                'errors': error_indices,
+                'no_policy': no_policy_indices,
+                'managed_count': managed_indices_count,
+                'total_indices': len(data.get('indices', {}))
+            }
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 405:
+                # ILM not supported on this cluster
+                return {'not_supported': True, 'reason': 'ILM API not available on this cluster (older ES version or ILM disabled)'}
+            else:
+                print(f"Error checking ILM status: {str(e)}")
+                return []
+        except Exception as e:
+            print(f"Error checking ILM status: {str(e)}")
+            return []
+
+    def check_no_replica_indices(self):
+        """
+        Check for indices that have no replicas (number_of_replicas = 0).
+        Returns a list of indices with no replicas.
+        """
+        import requests
+        from requests.auth import HTTPBasicAuth
+
+        try:
+            ES_URL = self.build_es_url()
+            if ES_URL is None:
+                return []
+
+            # Get index settings for all indices
+            settings_url = f'{ES_URL}/_all/_settings'
+
+            if self.elastic_authentication == True:
+                response = requests.get(
+                    settings_url,
+                    auth=HTTPBasicAuth(self.elastic_username, self.elastic_password),
+                    verify=False,
+                    timeout=self.timeout
+                )
+            else:
+                response = requests.get(settings_url, verify=False, timeout=self.timeout)
+
+            response.raise_for_status()
+
+            data = response.json()
+            no_replica_indices = []
+
+            for index_name, index_data in data.items():
+                if 'settings' in index_data:
+                    settings = index_data['settings']
+                    index_settings = settings.get('index', {})
+
+                    # Check number_of_replicas
+                    replicas = index_settings.get('number_of_replicas', '1')
+
+                    # Convert to int for comparison
+                    try:
+                        replica_count = int(replicas)
+                        if replica_count == 0:
+                            no_replica_indices.append({
+                                'index': index_name,
+                                'replicas': replica_count,
+                                'shards': index_settings.get('number_of_shards', 'Unknown'),
+                                'creation_date': index_settings.get('creation_date', 'Unknown')
+                            })
+                    except (ValueError, TypeError):
+                        # Skip if replica count cannot be determined
+                        continue
+
+            return no_replica_indices
+
+        except Exception as e:
+            print(f"Error checking replica settings: {str(e)}")
+            return []
+
+    def check_large_shards(self, max_size_gb=50):
+        """
+        Check for shards larger than the specified size in GB.
+        Returns a list of large shards.
+        """
+        import requests
+        from requests.auth import HTTPBasicAuth
+
+        try:
+            ES_URL = self.build_es_url()
+            if ES_URL is None:
+                return []
+
+            # Get detailed shard information
+            shards_url = f'{ES_URL}/_cat/shards?v&h=index,shard,prirep,store,node&bytes=b&s=store:desc'
+
+            if self.elastic_authentication == True:
+                response = requests.get(
+                    shards_url,
+                    auth=HTTPBasicAuth(self.elastic_username, self.elastic_password),
+                    verify=False,
+                    timeout=self.timeout
+                )
+            else:
+                response = requests.get(shards_url, verify=False, timeout=self.timeout)
+
+            response.raise_for_status()
+
+            lines = response.text.strip().split('\n')
+            large_shards = []
+            max_size_bytes = max_size_gb * 1024 * 1024 * 1024  # Convert GB to bytes
+
+            # Skip header line
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) >= 5:
+                    index_name = parts[0]
+                    shard_id = parts[1]
+                    shard_type = parts[2]  # 'p' for primary, 'r' for replica
+                    store_size = parts[3]
+                    node_name = parts[4] if len(parts) > 4 else 'unassigned'
+
+                    try:
+                        # Convert store size to bytes
+                        if store_size and store_size != '-':
+                            size_bytes = int(store_size)
+                            if size_bytes > max_size_bytes:
+                                size_gb = size_bytes / (1024 * 1024 * 1024)
+                                large_shards.append({
+                                    'index': index_name,
+                                    'shard': shard_id,
+                                    'type': 'Primary' if shard_type == 'p' else 'Replica',
+                                    'size_bytes': size_bytes,
+                                    'size_gb': round(size_gb, 2),
+                                    'node': node_name
+                                })
+                    except (ValueError, TypeError):
+                        # Skip if size cannot be determined
+                        continue
+
+            return large_shards
+
+        except Exception as e:
+            print(f"Error checking shard sizes: {str(e)}")
+            return []
+
+    def perform_cluster_health_checks(self, max_shard_size_gb=50, skip_ilm=False):
+        """
+        Perform all cluster health checks and return results as a dictionary.
+        Used for JSON output format.
+        """
+        from datetime import datetime
+
+        # Get cluster name from health data
+        try:
+            cluster_name = self.get_cluster_health().get('cluster_name', 'Unknown')
+        except:
+            cluster_name = 'Unknown'
+
+        # Perform ILM check unless skipped
+        if skip_ilm:
+            ilm_errors = {'skipped': True, 'reason': 'ILM checks skipped via --skip-ilm flag'}
+        else:
+            ilm_errors = self.check_ilm_errors()
+
+        return {
+            'cluster_name': cluster_name,
+            'timestamp': str(datetime.now()),
+            'checks': {
+                'ilm_results': ilm_errors,  # This now contains the comprehensive ILM analysis
+                'no_replica_indices': self.check_no_replica_indices(),
+                'large_shards': self.check_large_shards(max_shard_size_gb)
+            },
+            'parameters': {
+                'max_shard_size_gb': max_shard_size_gb,
+                'skip_ilm': skip_ilm
+            }
+        }
+
+    def display_cluster_health_report(self, check_results):
+        """
+        Display a comprehensive cluster health report using Rich formatting.
+        """
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.columns import Columns
+        from rich.text import Text
+        from rich import box
+        from datetime import datetime
+
+        console = Console()
+
+        # Extract results
+        ilm_results = check_results.get('ilm_errors', check_results.get('ilm_results', []))
+        no_replica_indices = check_results.get('no_replica_indices', [])
+        large_shards = check_results.get('large_shards', [])
+        max_shard_size = check_results.get('max_shard_size', 50)
+        show_details = check_results.get('show_details', False)
+
+        # Handle both old format (list) and new format (dict) for backward compatibility
+        if isinstance(ilm_results, dict):
+            ilm_errors = ilm_results.get('errors', [])
+            ilm_no_policy = ilm_results.get('no_policy', [])
+            ilm_managed_count = ilm_results.get('managed_count', 0)
+            ilm_total_count = ilm_results.get('total_indices', 0)
+        else:
+            # Old format - treat as error list only
+            ilm_errors = ilm_results
+            ilm_no_policy = []
+            ilm_managed_count = 0
+            ilm_total_count = len(ilm_errors)
+
+        # Create title panel
+        try:
+            cluster_name = self.get_cluster_health().get('cluster_name', 'Unknown')
+        except:
+            cluster_name = 'Unknown'
+
+        title_text = f"🏥 Cluster Health Check Report"
+        subtitle_text = f"Cluster: {cluster_name} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+        title_panel = Panel(
+            Text(title_text, style="bold cyan", justify="center"),
+            subtitle=subtitle_text,
+            border_style="cyan",
+            padding=(1, 2)
+        )
+
+        # Create summary panel
+        summary_table = Table.grid(padding=(0, 1))
+        summary_table.add_column(style="bold white", no_wrap=True)
+        summary_table.add_column(style="bold cyan")
+
+        # Add summary with status indicators
+        if isinstance(ilm_results, dict) and ilm_results.get('not_supported'):
+            ilm_status = "ℹ️  Not supported on this cluster"
+        elif isinstance(ilm_results, dict) and ilm_results.get('skipped'):
+            ilm_status = "⏭️  Skipped"
+        else:
+            error_count = len(ilm_errors)
+            no_policy_count = len(ilm_no_policy)
+
+            if error_count == 0 and no_policy_count == 0:
+                ilm_status = "✅ All indices managed"
+            elif error_count > 0 and no_policy_count > 0:
+                ilm_status = f"❌ {error_count} errors, ⚠️  {no_policy_count} unmanaged"
+            elif error_count > 0:
+                ilm_status = f"❌ {error_count} errors found"
+            else:
+                ilm_status = f"⚠️  {no_policy_count} indices unmanaged"
+
+        replica_status = "✅ All have replicas" if len(no_replica_indices) == 0 else f"⚠️  {len(no_replica_indices)} without replicas"
+        shard_status = "✅ All within limits" if len(large_shards) == 0 else f"⚠️  {len(large_shards)} oversized shards"
+
+        summary_table.add_row("🔍 ILM Status:", ilm_status)
+        summary_table.add_row("📊 Replica Status:", replica_status)
+        summary_table.add_row(f"📏 Shard Size (>{max_shard_size}GB):", shard_status)
+
+        # Determine border color based on issues found
+        has_ilm_errors = len(ilm_errors) > 0
+        has_ilm_unmanaged = len(ilm_no_policy) > 0
+        has_issues = has_ilm_errors or has_ilm_unmanaged or len(no_replica_indices) > 0 or len(large_shards) > 0
+
+        summary_panel = Panel(
+            summary_table,
+            title="📋 Summary",
+            border_style="green" if not has_issues else "yellow",
+            padding=(1, 2)
+        )
+
+        # Display header
+        print()
+        console.print(title_panel)
+        print()
+        console.print(summary_panel)
+        print()
+
+        # ILM Info Messages
+        if isinstance(ilm_results, dict) and (ilm_results.get('not_supported') or ilm_results.get('skipped')):
+            if ilm_results.get('not_supported'):
+                info_text = f"ℹ️  {ilm_results.get('reason', 'ILM API not available')}\n\nThis is normal for Elasticsearch versions < 6.6 or clusters with ILM disabled."
+                title = "📋 ILM Information"
+            else:  # skipped
+                info_text = f"⏭️  {ilm_results.get('reason', 'ILM checks were skipped')}\n\nUse the command without --skip-ilm to include ILM checks."
+                title = "📋 ILM Skipped"
+
+            ilm_info_panel = Panel(
+                info_text,
+                title=title,
+                border_style="blue",
+                padding=(1, 2)
+            )
+            console.print(ilm_info_panel)
+            print()
+
+        # ILM Overview (if we have comprehensive data)
+        elif isinstance(ilm_results, dict) and ilm_total_count > 0:
+            overview_text = f"📊 Total indices analyzed: {ilm_total_count}\n"
+            overview_text += f"✅ Successfully managed: {ilm_managed_count}\n"
+            overview_text += f"❌ In error state: {len(ilm_errors)}\n"
+            overview_text += f"⚠️  Without ILM policy: {len(ilm_no_policy)}"
+
+            overview_panel = Panel(
+                overview_text,
+                title="📋 ILM Coverage Overview",
+                border_style="blue",
+                padding=(1, 2)
+            )
+            console.print(overview_panel)
+            print()
+
+        # ILM Errors Details
+        if isinstance(ilm_errors, list) and ilm_errors:
+            ilm_table = Table(title="❌ Indices with ILM Errors", box=box.ROUNDED, expand=True)
+            ilm_table.add_column("Index", style="bold red", ratio=6)
+            ilm_table.add_column("Policy", style="cyan", ratio=2)
+            ilm_table.add_column("Phase", style="yellow", ratio=0.8)
+            ilm_table.add_column("Action", style="magenta", ratio=1)
+            ilm_table.add_column("Error Reason", style="red", ratio=3)
+            if show_details:
+                ilm_table.add_column("Step Time", style="dim")
+                ilm_table.add_column("Failed Step", style="dim")
+
+            for error in ilm_errors:
+                # Extract error reason from step_info with comprehensive fallbacks
+                error_reason = "Unknown error"
+
+                if 'step_info' in error and error['step_info']:
+                    step_info = error['step_info']
+
+                    # Try different fields for error information
+                    if isinstance(step_info, dict):
+                        if 'reason' in step_info:
+                            error_reason = step_info['reason']
+                        elif 'message' in step_info:
+                            error_reason = step_info['message']
+                        elif 'error' in step_info:
+                            if isinstance(step_info['error'], dict):
+                                error_reason = step_info['error'].get('reason', str(step_info['error']))
+                            else:
+                                error_reason = str(step_info['error'])
+                        elif 'type' in step_info:
+                            # Sometimes Elasticsearch errors have 'type' field
+                            error_reason = f"{step_info['type']}: {step_info.get('reason', 'No details')}"
+                        else:
+                            # If step_info exists but no clear reason, show formatted content
+                            error_reason = str(step_info)
+                    else:
+                        error_reason = str(step_info)
+
+                # Fallback to failed_step if no useful step_info
+                if error_reason == "Unknown error" and error.get('failed_step') and error['failed_step'] != 'Unknown':
+                    error_reason = f"Failed at step: {error['failed_step']}"
+
+                # Add retry information if available (this is very important!)
+                retry_count = error.get('failed_step_retry_count', 0)
+                if retry_count > 0:
+                    if retry_count > 1000:
+                        error_reason += f" (retried {retry_count:,} times!)"
+                    else:
+                        error_reason += f" (retried {retry_count} times)"
+
+                # For table display, keep error messages at reasonable length but preserve key info
+                if len(error_reason) > 100:
+                    # Try to find a good break point to preserve the most important part
+                    if " for index [" in error_reason and len(error_reason) > 120:
+                        # Try to preserve the main error message before the index name
+                        parts = error_reason.split(" for index [", 1)
+                        if len(parts[0]) < 90:
+                            error_reason = parts[0] + " for index [...]" + error_reason[error_reason.rfind("("):]
+                        else:
+                            error_reason = error_reason[:97] + "..."
+                    else:
+                        error_reason = error_reason[:97] + "..."
+
+                if show_details:
+                    ilm_table.add_row(
+                        error['index'],
+                        error['policy'],
+                        error['phase'],
+                        error['action'],
+                        error_reason,
+                        error['step_time'],
+                        error['failed_step']
+                    )
+                else:
+                    ilm_table.add_row(
+                        error['index'],
+                        error['policy'],
+                        error['phase'],
+                        error['action'],
+                        error_reason
+                    )
+
+            console.print(Panel(ilm_table, border_style="red", padding=(1, 2)))
+            print()
+
+        # Indices without ILM policies
+        if ilm_no_policy:
+            no_policy_table = Table(title="⚠️  Indices without ILM Policies", box=box.ROUNDED, expand=True)
+            no_policy_table.add_column("Index", style="bold yellow", no_wrap=True, ratio=4)
+            no_policy_table.add_column("Status", style="yellow", ratio=2)
+
+            for index_info in ilm_no_policy:
+                no_policy_table.add_row(
+                    index_info['index'],
+                    index_info['reason']
+                )
+
+            console.print(Panel(no_policy_table, border_style="yellow", padding=(1, 2)))
+            print()
+
+        # No Replica Indices Details
+        if no_replica_indices:
+            replica_table = Table(title="⚠️  Indices with No Replicas", box=box.ROUNDED)
+            replica_table.add_column("Index", style="bold yellow", no_wrap=True)
+            replica_table.add_column("Shards", style="cyan")
+            replica_table.add_column("Replicas", style="red")
+            if show_details:
+                replica_table.add_column("Creation Date", style="dim")
+
+            for index in no_replica_indices:
+                if show_details:
+                    creation_date = index['creation_date']
+                    if creation_date != 'Unknown' and creation_date.isdigit():
+                        try:
+                            creation_date = datetime.fromtimestamp(int(creation_date) / 1000).strftime('%Y-%m-%d %H:%M')
+                        except:
+                            pass
+
+                    replica_table.add_row(
+                        index['index'],
+                        str(index['shards']),
+                        str(index['replicas']),
+                        creation_date
+                    )
+                else:
+                    replica_table.add_row(
+                        index['index'],
+                        str(index['shards']),
+                        str(index['replicas'])
+                    )
+
+            console.print(Panel(replica_table, border_style="yellow", padding=(1, 2)))
+            print()
+
+        # Large Shards Details
+        if large_shards:
+            shard_table = Table(title=f"📏 Shards Larger Than {max_shard_size}GB", box=box.ROUNDED)
+            shard_table.add_column("Index", style="bold orange1", no_wrap=True)
+            shard_table.add_column("Shard", style="cyan")
+            shard_table.add_column("Type", style="yellow")
+            shard_table.add_column("Size (GB)", style="red", justify="right")
+            if show_details:
+                shard_table.add_column("Node", style="dim")
+
+            for shard in large_shards:
+                if show_details:
+                    shard_table.add_row(
+                        shard['index'],
+                        str(shard['shard']),
+                        shard['type'],
+                        str(shard['size_gb']),
+                        shard['node']
+                    )
+                else:
+                    shard_table.add_row(
+                        shard['index'],
+                        str(shard['shard']),
+                        shard['type'],
+                        str(shard['size_gb'])
+                    )
+
+            console.print(Panel(shard_table, border_style="orange1", padding=(1, 2)))
+            print()
+
+        # Final recommendations
+        has_actual_ilm_errors = len(ilm_errors) > 0
+        has_unmanaged_indices = len(ilm_no_policy) > 0
+        if has_actual_ilm_errors or has_unmanaged_indices or no_replica_indices or large_shards:
+            recommendations = []
+
+            if has_actual_ilm_errors:
+                recommendations.append("🔧 Review ILM policies and fix configuration errors")
+
+            if has_unmanaged_indices:
+                recommendations.append("📋 Consider adding ILM policies to unmanaged indices for automated lifecycle management")
+
+            if no_replica_indices:
+                recommendations.append("🔄 Consider adding replicas for data redundancy")
+
+            if large_shards:
+                recommendations.append(f"📏 Consider reindexing or using rollover for shards > {max_shard_size}GB")
+
+            if recommendations:
+                rec_text = "\n".join([f"• {rec}" for rec in recommendations])
+                rec_panel = Panel(
+                    rec_text,
+                    title="💡 Recommendations",
+                    border_style="blue",
+                    padding=(1, 2)
+                )
+                console.print(rec_panel)
+                print()
+
+    def init_replica_manager(self):
+        """Initialize the replica manager for this ES client."""
+        if not hasattr(self, 'replica_manager'):
+            self.replica_manager = ReplicaManager(self)
+
+
+class ReplicaManager:
+    """Manages replica count operations for Elasticsearch indices."""
+
+    def __init__(self, es_client):
+        """Initialize replica manager with ES client reference."""
+        self.es_client = es_client
+
+    def plan_replica_updates(self, target_count, indices=None, pattern=None, no_replicas_only=False):
+        """
+        Plan replica count updates without executing them.
+
+        Args:
+            target_count (int): Target replica count
+            indices (list): Specific indices to update
+            pattern (str): Pattern to match indices (e.g., "logs-*")
+            no_replicas_only (bool): Only update indices with 0 replicas
+
+        Returns:
+            dict: Plan results with indices to update and metadata
+        """
+        import requests
+        import fnmatch
+        from requests.auth import HTTPBasicAuth
+
+        try:
+            # Get current cluster state
+            ES_URL = self.es_client.build_es_url()
+            if ES_URL is None:
+                raise Exception("Could not build Elasticsearch URL")
+
+            # Get all indices and their settings
+            settings_url = f'{ES_URL}/_all/_settings?filter_path=*.settings.index.number_of_replicas'
+
+            if self.es_client.elastic_authentication:
+                response = requests.get(
+                    settings_url,
+                    auth=HTTPBasicAuth(self.es_client.elastic_username, self.es_client.elastic_password),
+                    verify=False,
+                    timeout=self.es_client.timeout
+                )
+            else:
+                response = requests.get(settings_url, verify=False, timeout=self.es_client.timeout)
+
+            response.raise_for_status()
+            settings_data = response.json()
+
+            # Build list of candidate indices
+            candidate_indices = []
+
+            if indices:
+                # Use specific indices provided
+                for index_name in indices:
+                    if index_name in settings_data:
+                        candidate_indices.append(index_name)
+                    else:
+                        print(f"Warning: Index '{index_name}' not found in cluster")
+            elif pattern:
+                # Use pattern matching
+                for index_name in settings_data.keys():
+                    if fnmatch.fnmatch(index_name, pattern):
+                        candidate_indices.append(index_name)
+            else:
+                # Use all indices
+                candidate_indices = list(settings_data.keys())
+
+            # Filter indices that need updates
+            indices_to_update = []
+            skipped_indices = []
+
+            for index_name in candidate_indices:
+                if index_name not in settings_data:
+                    continue
+
+                current_replicas = settings_data[index_name].get('settings', {}).get('index', {}).get('number_of_replicas')
+
+                if current_replicas is None:
+                    skipped_indices.append({
+                        'index': index_name,
+                        'reason': 'Could not determine current replica count'
+                    })
+                    continue
+
+                current_replicas = int(current_replicas)
+
+                # Apply no_replicas_only filter
+                if no_replicas_only and current_replicas != 0:
+                    skipped_indices.append({
+                        'index': index_name,
+                        'reason': f'Has {current_replicas} replicas (--no-replicas-only specified)'
+                    })
+                    continue
+
+                # Check if update is needed
+                if current_replicas != target_count:
+                    indices_to_update.append({
+                        'index': index_name,
+                        'current_replicas': current_replicas,
+                        'target_replicas': target_count
+                    })
+                else:
+                    skipped_indices.append({
+                        'index': index_name,
+                        'reason': f'Already has {target_count} replicas'
+                    })
+
+            return {
+                'indices_to_update': indices_to_update,
+                'skipped_indices': skipped_indices,
+                'target_count': target_count,
+                'total_candidates': len(candidate_indices),
+                'total_updates_needed': len(indices_to_update),
+                'pattern': pattern,
+                'no_replicas_only': no_replicas_only
+            }
+
+        except Exception as e:
+            raise Exception(f"Failed to plan replica updates: {str(e)}")
+
+    def execute_replica_updates(self, indices_to_update, target_count, progress=None, task_id=None):
+        """
+        Execute the planned replica count updates.
+
+        Args:
+            indices_to_update (list): List of indices to update from plan_replica_updates
+            target_count (int): Target replica count
+            progress (Progress): Optional Rich progress bar
+            task_id: Optional task ID for progress tracking
+
+        Returns:
+            dict: Execution results
+        """
+        import requests
+        import time
+        from requests.auth import HTTPBasicAuth
+
+        try:
+            ES_URL = self.es_client.build_es_url()
+            if ES_URL is None:
+                raise Exception("Could not build Elasticsearch URL")
+
+            successful_updates = []
+            failed_updates = []
+
+            for index_info in indices_to_update:
+                index_name = index_info['index']
+
+                try:
+                    # Update replica count
+                    settings_url = f'{ES_URL}/{index_name}/_settings'
+                    update_payload = {
+                        "index": {
+                            "number_of_replicas": target_count
+                        }
+                    }
+
+                    if self.es_client.elastic_authentication:
+                        response = requests.put(
+                            settings_url,
+                            json=update_payload,
+                            auth=HTTPBasicAuth(self.es_client.elastic_username, self.es_client.elastic_password),
+                            verify=False,
+                            timeout=self.es_client.timeout
+                        )
+                    else:
+                        response = requests.put(settings_url, json=update_payload, verify=False, timeout=self.es_client.timeout)
+
+                    response.raise_for_status()
+
+                    successful_updates.append({
+                        'index': index_name,
+                        'previous_replicas': index_info['current_replicas'],
+                        'new_replicas': target_count,
+                        'timestamp': time.time()
+                    })
+
+                except Exception as e:
+                    failed_updates.append({
+                        'index': index_name,
+                        'error': str(e),
+                        'previous_replicas': index_info.get('current_replicas', 'unknown')
+                    })
+
+                # Update progress if provided
+                if progress and task_id:
+                    progress.advance(task_id)
+                    time.sleep(0.1)  # Small delay to show progress
+
+            return {
+                'successful_updates': successful_updates,
+                'failed_updates': failed_updates,
+                'target_count': target_count,
+                'total_attempted': len(indices_to_update),
+                'success_count': len(successful_updates),
+                'failure_count': len(failed_updates)
+            }
+
+        except Exception as e:
+            raise Exception(f"Failed to execute replica updates: {str(e)}")
+
+    def display_update_plan(self, plan_result, dry_run=False):
+        """Display the replica update plan in a formatted table."""
+        from rich.console import Console
+        from rich.table import Table
+        from rich.panel import Panel
+        from rich import box
+
+        console = Console()
+
+        # Summary information
+        summary_info = [
+            f"📊 Total indices analyzed: {plan_result['total_candidates']}",
+            f"🔧 Indices requiring updates: {plan_result['total_updates_needed']}",
+            f"⏭️  Indices to skip: {len(plan_result['skipped_indices'])}",
+            f"🎯 Target replica count: {plan_result['target_count']}"
+        ]
+
+        if plan_result.get('pattern'):
+            summary_info.append(f"🔍 Pattern filter: {plan_result['pattern']}")
+        if plan_result.get('no_replicas_only'):
+            summary_info.append("📋 Mode: No-replicas-only")
+
+        summary_text = "\n".join(summary_info)
+        summary_panel = Panel(
+            summary_text,
+            title="📋 Replica Update Plan Summary",
+            border_style="blue",
+            padding=(1, 2)
+        )
+        console.print(summary_panel)
+        print()
+
+        # Show indices to update
+        if plan_result['indices_to_update']:
+            update_table = Table(title="🔧 Indices to Update", box=box.ROUNDED, expand=True)
+            update_table.add_column("Index", style="bold cyan", ratio=4)
+            update_table.add_column("Current Replicas", style="red", ratio=1)
+            update_table.add_column("Target Replicas", style="green", ratio=1)
+            update_table.add_column("Status", style="yellow", ratio=2)
+
+            for index_info in plan_result['indices_to_update']:
+                status = "🔄 Ready for update" if not dry_run else "📋 Dry run (no changes)"
+                update_table.add_row(
+                    index_info['index'],
+                    str(index_info['current_replicas']),
+                    str(index_info['target_replicas']),
+                    status
+                )
+
+            console.print(Panel(update_table, border_style="green", padding=(1, 2)))
+            print()
+
+        # Show skipped indices (first 10)
+        if plan_result['skipped_indices']:
+            skipped_table = Table(title="⏭️  Skipped Indices (First 10)", box=box.ROUNDED, expand=True)
+            skipped_table.add_column("Index", style="bold yellow", ratio=3)
+            skipped_table.add_column("Reason", style="dim", ratio=3)
+
+            for index_info in plan_result['skipped_indices'][:10]:
+                skipped_table.add_row(
+                    index_info['index'],
+                    index_info['reason']
+                )
+
+            if len(plan_result['skipped_indices']) > 10:
+                skipped_table.add_row("...", f"and {len(plan_result['skipped_indices']) - 10} more")
+
+            console.print(Panel(skipped_table, border_style="yellow", padding=(1, 2)))
+            print()
+
+    def display_update_results(self, result):
+        """Display the results of replica updates."""
+        from rich.console import Console
+        from rich.table import Table
+        from rich.panel import Panel
+        from rich import box
+
+        console = Console()
+
+        # Summary
+        summary_info = [
+            f"✅ Successful updates: {result['success_count']}/{result['total_attempted']}",
+            f"❌ Failed updates: {result['failure_count']}/{result['total_attempted']}",
+            f"🎯 Target replica count: {result['target_count']}"
+        ]
+
+        summary_text = "\n".join(summary_info)
+        border_style = "green" if result['failure_count'] == 0 else "red"
+        summary_panel = Panel(
+            summary_text,
+            title="📊 Replica Update Results",
+            border_style=border_style,
+            padding=(1, 2)
+        )
+        console.print(summary_panel)
+        print()
+
+        # Show successful updates
+        if result['successful_updates']:
+            success_table = Table(title="✅ Successful Updates", box=box.ROUNDED, expand=True)
+            success_table.add_column("Index", style="bold green", ratio=4)
+            success_table.add_column("Previous", style="red", ratio=1)
+            success_table.add_column("New", style="green", ratio=1)
+            success_table.add_column("Status", style="bright_green", ratio=2)
+
+            for update_info in result['successful_updates']:
+                success_table.add_row(
+                    update_info['index'],
+                    str(update_info['previous_replicas']),
+                    str(update_info['new_replicas']),
+                    "✅ Updated successfully"
+                )
+
+            console.print(Panel(success_table, border_style="green", padding=(1, 2)))
+            print()
+
+        # Show failed updates
+        if result['failed_updates']:
+            failure_table = Table(title="❌ Failed Updates", box=box.ROUNDED, expand=True)
+            failure_table.add_column("Index", style="bold red", ratio=3)
+            failure_table.add_column("Previous", style="yellow", ratio=1)
+            failure_table.add_column("Error", style="red", ratio=4)
+
+            for failure_info in result['failed_updates']:
+                failure_table.add_row(
+                    failure_info['index'],
+                    str(failure_info['previous_replicas']),
+                    failure_info['error']
+                )
+
+            console.print(Panel(failure_table, border_style="red", padding=(1, 2)))
+            print()
+
 
 # ---- End of Class Library above.

@@ -98,6 +98,42 @@ class ConfigurationManager:
         """
         return self.default_settings.get('ascii_mode', False)
 
+    def get_connection_timeout(self):
+        """
+        Get the connection timeout from configuration.
+
+        Returns:
+            int: Connection timeout in seconds (defaults to 30)
+        """
+        return self.default_settings.get('connection_timeout', 30)
+
+    def get_read_timeout(self):
+        """
+        Get the read timeout from configuration.
+
+        Returns:
+            int: Read timeout in seconds (defaults to 60)
+        """
+        return self.default_settings.get('read_timeout', 60)
+
+    def get_dangling_cleanup_config(self):
+        """
+        Get dangling cleanup configuration settings.
+
+        Returns:
+            dict: Dictionary containing dangling cleanup configuration options
+        """
+        dangling_config = self.default_settings.get('dangling_cleanup', {})
+        
+        return {
+            'max_retries': dangling_config.get('max_retries', 3),
+            'retry_delay': dangling_config.get('retry_delay', 5),
+            'timeout': dangling_config.get('timeout', 60),
+            'default_log_level': dangling_config.get('default_log_level', 'INFO'),
+            'enable_progress_bar': dangling_config.get('enable_progress_bar', True),
+            'confirmation_required': dangling_config.get('confirmation_required', True)
+        }
+
     def _resolve_password(self, server_config):
         """
         Resolve password using the new environment-based password scheme.
